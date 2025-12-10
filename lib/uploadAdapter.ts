@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 export type IncomingFile = {
   file: File;
   type?: 'image' | 'file';
@@ -15,9 +17,9 @@ export type UploadedFile = {
   projectId?: string;
 };
 
-// Maximum file size: 10MB for files, 5MB for images
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+// Maximum file size: 25MB for files, 10MB for images
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
 // Allowed file types
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
@@ -129,11 +131,13 @@ async function createThumbnail(file: File): Promise<string> {
 
 // Validate file
 function validateFile(file: File, type: 'image' | 'file'): void {
+  console.log('Validating file:', file.name, 'Type:', file.type, 'Size:', file.size, 'Category:', type);
+  
   // Check file size
   const maxSize = type === 'image' ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
   if (file.size > maxSize) {
     throw new UploadError(
-      `File size exceeds ${maxSize / (1024 * 1024)}MB limit`,
+      `File "${file.name}" size (${(file.size / (1024 * 1024)).toFixed(2)}MB) exceeds ${maxSize / (1024 * 1024)}MB limit`,
       'FILE_TOO_LARGE'
     );
   }
@@ -141,39 +145,48 @@ function validateFile(file: File, type: 'image' | 'file'): void {
   // Check file type
   const allowedTypes = type === 'image' ? ALLOWED_IMAGE_TYPES : ALLOWED_FILE_TYPES;
   if (!allowedTypes.includes(file.type)) {
+    console.error('File type not allowed:', file.type, 'Allowed types:', allowedTypes);
     throw new UploadError(
-      `File type ${file.type} not allowed`,
+      `File type "${file.type}" not allowed for ${file.name}`,
       'INVALID_FILE_TYPE'
     );
   }
+  
+  console.log('File validation passed for:', file.name);
 }
 
-// Storage adapter
+// Storage adapter using Supabase Storage
 const storage = {
-  async store(file: Blob, name: string): Promise<string> {
-    // In production: Upload to cloud storage (S3, Google Cloud Storage, etc.)
-    // For demo: Store in localStorage with base64 encoding
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        const id = `file_${Date.now()}`;
-        localStorage.setItem(id, base64);
-        resolve(`local://${id}`);
-      };
-      reader.readAsDataURL(file);
-    });
+  async store(file: Blob, name: string, projectId: string, type: 'image' | 'file'): Promise<string> {
+    // Use a default projectId if not provided (for backward compatibility)
+    const safeProjectId = projectId || 'temp';
+    const fileExt = name.split('.').pop();
+    const fileName = `${safeProjectId}/${type}s/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+    
+    const { data, error } = await supabase.storage
+      .from('chat-files')
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (error) {
+      console.error('Supabase upload error:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      console.error('Attempted filename:', fileName);
+      throw new UploadError(`Failed to upload to storage: ${error.message}`, 'STORAGE_UPLOAD_FAILED');
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('chat-files')
+      .getPublicUrl(data.path);
+
+    return publicUrl;
   },
 
   async get(url: string): Promise<string> {
-    // In production: Get signed URL from cloud storage
-    // For demo: Get from localStorage
-    if (url.startsWith('local://')) {
-      const id = url.replace('local://', '');
-      const base64 = localStorage.getItem(id);
-      if (!base64) throw new UploadError('File not found', 'FILE_NOT_FOUND');
-      return base64;
-    }
+    // Return the URL as-is (public URLs are directly accessible)
     return url;
   }
 };
@@ -195,10 +208,30 @@ export async function uploadFiles(items: IncomingFile[]): Promise<UploadedFile[]
       if (type === 'image') {
         uploadedFile = await compressImage(file);
         thumbnailUrl = await createThumbnail(file);
+        if (thumbnailUrl.startsWith('data:')) {
+          // Upload thumbnail to Supabase Storage
+          const thumbnailBlob = await fetch(thumbnailUrl).then(r => r.blob());
+          const thumbnailExt = file.name.split('.').pop();
+          const thumbnailFileName = `${projectId}/thumbnails/${Date.now()}_${Math.random().toString(36).substring(7)}.${thumbnailExt}`;
+          
+          const { data: thumbData } = await supabase.storage
+            .from('chat-files')
+            .upload(thumbnailFileName, thumbnailBlob, {
+              cacheControl: '3600',
+              upsert: false
+            });
+
+          if (thumbData) {
+            const { data: { publicUrl } } = supabase.storage
+              .from('chat-files')
+              .getPublicUrl(thumbData.path);
+            thumbnailUrl = publicUrl;
+          }
+        }
       }
 
       // Upload to storage
-      const url = await storage.store(uploadedFile, file.name);
+      const url = await storage.store(uploadedFile, file.name, projectId!, type);
 
       results.push({
         id: `upl_${crypto.randomUUID?.() ?? Date.now()}`,

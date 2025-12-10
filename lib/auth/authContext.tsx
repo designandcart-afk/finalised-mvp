@@ -145,12 +145,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error('Supabase auth error:', error);
         
         // Provide specific error messages
-        if (error.message.includes('Invalid login credentials')) {
-          throw new Error('Invalid email or password. Please check your credentials and try again.');
+        if (error.message.includes('Invalid login credentials') || error.message.includes('invalid_grant')) {
+          throw new Error('Incorrect password. Please try again.');
         } else if (error.message.includes('Email not confirmed')) {
           throw new Error('Please verify your email address before signing in. Check your inbox for the verification link.');
         } else if (error.message.includes('email_confirmed_at')) {
           throw new Error('Please verify your email address before signing in. Check your inbox for the verification link.');
+        } else if (error.message.includes('User not found')) {
+          throw new Error('No account found with this email address.');
         } else {
           throw new Error(error.message || 'Failed to sign in');
         }
@@ -190,13 +192,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) {
         console.error('Supabase signup error:', error);
         
-        if (error.message.includes('User already registered')) {
-          throw new Error('This email is already registered. Please sign in instead or use password reset if you forgot your password.');
+        if (error.message.includes('User already registered') || error.message.includes('already been registered')) {
+          throw new Error('Email already exists. Please sign in instead or use password reset if you forgot your password.');
         } else if (error.message.includes('Password should be')) {
           throw new Error('Password should be at least 6 characters long.');
         } else {
           throw new Error(error.message || 'Failed to create account');
         }
+      }
+
+      // Check if email already exists (Supabase returns empty identities array for existing users)
+      if (data.user && data.user.identities && data.user.identities.length === 0) {
+        throw new Error('This email already has an account. Please sign in instead or use password reset if you forgot your password.');
       }
 
       if (data.user && !data.user.email_confirmed_at) {

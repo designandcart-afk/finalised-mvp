@@ -77,7 +77,7 @@ export default function ResetPasswordPage() {
 
             <div className="space-y-3">
               <Button
-                onClick={() => router.push('/signin')}
+                onClick={() => router.push('/login')}
                 className="w-full bg-[#d96857] text-white py-3 rounded-xl font-medium hover:bg-[#c85745] transition"
               >
                 Back to Sign In
@@ -105,7 +105,7 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-md">
         {/* Back Button */}
         <Link 
-          href="/signin"
+          href="/login"
           className="inline-flex items-center gap-2 text-sm text-[#2e2e2e]/70 hover:text-[#d96857] mb-6 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -172,7 +172,7 @@ export default function ResetPasswordPage() {
           {/* Footer */}
           <p className="mt-6 text-center text-sm text-[#2e2e2e]/70">
             Remember your password?{' '}
-            <Link href="/signin" className="text-[#d96857] hover:underline font-medium">
+            <Link href="/login" className="text-[#d96857] hover:underline font-medium">
               Sign In
             </Link>
           </p>

@@ -2,6 +2,7 @@
 import { useState, useMemo } from "react";
 import CenterModal from "./CenterModal";
 import toast from 'react-hot-toast';
+import { cartService } from "@/lib/services/cartService";
 
 type ProductT = { id: string; title: string; imageUrl: string; price: number };
 
@@ -66,46 +67,55 @@ export default function AreaModal({
   };
 
   // Add to cart
-  const addToCart = (product: ProductT, quantity: number = 1) => {
-    const CART_KEY = "dc:cart";
-    const cart = getCartItems();
-    
-    const existingItem = cart.find((item: any) => 
-      item.productId === product.id && item.area === area && item.projectId === projectId
-    );
-    
-    if (existingItem) {
-      existingItem.qty += quantity;
-    } else {
-      const newItem = {
-        id: `line_${Date.now()}`,
-        productId: product.id,
-        qty: quantity,
-        projectId: projectId,
-        area: area,
-        price: product.price,
-        title: product.title,
-        imageUrl: product.imageUrl,
-      };
-      cart.push(newItem);
-    }
-    
-    localStorage.setItem(CART_KEY, JSON.stringify(cart));
-    setCartItems(cart);
-    
+  const addToCart = async (product: ProductT, quantity: number = 1) => {
     try {
-      window.dispatchEvent(new CustomEvent("cart:add", { detail: { productId: product.id } }));
-    } catch {}
-    
-    toast.success(`Added ${quantity}x "${product.title}" to cart`, {
-      duration: 2000,
-      style: {
-        background: '#10b981',
-        color: '#fff',
-        borderRadius: '12px',
-        padding: '12px 16px',
-      },
-    });
+      const result = await cartService.addToCart(
+        product.id,
+        quantity,
+        projectId,
+        area,
+        {
+          title: product.title,
+          price: product.price,
+          imageUrl: product.imageUrl,
+        }
+      );
+      
+      if (result.success) {
+        // Update local state
+        const cart = getCartItems();
+        const existingItem = cart.find((item: any) => 
+          item.productId === product.id && item.area === area && item.projectId === projectId
+        );
+        
+        if (existingItem) {
+          existingItem.qty += quantity;
+        } else {
+          cart.push({
+            id: `line_${Date.now()}`,
+            productId: product.id,
+            qty: quantity,
+            projectId: projectId,
+            area: area,
+            price: product.price,
+            title: product.title,
+            imageUrl: product.imageUrl,
+          });
+        }
+        setCartItems(cart);
+        
+        try {
+          window.dispatchEvent(new CustomEvent("cart:add", { detail: { productId: product.id } }));
+        } catch {}
+        
+        toast.success(`Added ${quantity}x "${product.title}" to cart`);
+      } else {
+        toast.error(result.error || 'Failed to add to cart');
+      }
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+      toast.error('Failed to add to cart');
+    }
   };
 
   // Update cart quantity
@@ -135,7 +145,7 @@ export default function AreaModal({
   };
 
   return (
-    <CenterModal open={open} onClose={onClose} hideClose maxWidth="max-w-5xl">
+    <CenterModal open={open} onClose={onClose} hideClose size="large">
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur rounded-t-3xl px-6 pt-6 pb-4 border-b border-black/5">
         <div className="flex items-start justify-between">

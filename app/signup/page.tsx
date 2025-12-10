@@ -105,7 +105,7 @@ export default function SignUpPage() {
 
             <div className="space-y-3">
               <Button
-                onClick={() => router.push('/signin')}
+                onClick={() => router.push('/login')}
                 className="w-full bg-[#d96857] text-white py-3 rounded-xl font-medium hover:bg-[#c85745] transition"
               >
                 Go to Sign In
@@ -288,7 +288,7 @@ export default function SignUpPage() {
           {/* Footer */}
           <p className="mt-6 text-center text-sm text-[#2e2e2e]/70">
             Already have an account?{' '}
-            <Link href="/signin" className="text-[#d96857] hover:underline font-medium">
+            <Link href="/login" className="text-[#d96857] hover:underline font-medium">
               Sign In
             </Link>
           </p>

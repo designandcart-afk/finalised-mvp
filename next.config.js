@@ -1,15 +1,40 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    domains: [
-      process.env.NEXT_PUBLIC_SUPABASE_STORAGE_DOMAIN,
-      'images.unsplash.com', // For demo images
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'drive.google.com',
+      },
+      {
+        protocol: 'https',
+        hostname: 'lh3.googleusercontent.com',
+      },
+      {
+        protocol: 'https',
+        hostname: 'images.unsplash.com',
+      },
+      {
+        protocol: 'https',
+        hostname: 'picsum.photos',
+      },
     ],
+    // Optimize image loading
+    formats: ['image/webp'],
+    minimumCacheTTL: 60,
+  },
+  // Production optimizations
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production' ? {
+      exclude: ['error', 'warn'],
+    } : false,
   },
   // Enable edge runtime for better performance
-    experimental: {
-      serverActions: {},
-    },
+  experimental: {
+    serverActions: {},
+  },
+  // Optimize production build
+  swcMinify: true,
   // Add rewrites for clean URLs
   async rewrites() {
     return [

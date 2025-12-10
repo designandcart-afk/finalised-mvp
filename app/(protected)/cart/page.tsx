@@ -2,10 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { demoProductsAll, demoProjects, demoCart } from "@/lib/demoData";
+import { useRouter } from "next/navigation";
+import { demoProductsAll, demoProjects } from "@/lib/demoData";
 import { Button } from "@/components/UI";
 import { useProjects } from "@/lib/contexts/projectsContext";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { cartService } from "@/lib/services/cartService";
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 
 type CartLine = {
   id: string;
@@ -13,13 +22,14 @@ type CartLine = {
   qty: number;
   projectId?: string;
   area?: string;
+  price?: number;
+  title?: string;
+  imageUrl?: string;
 };
-
-const CART_KEY = "dc:cart";
-const ORDERS_KEY = "dc:orders";
 
 export default function CartPage() {
   const { projects } = useProjects();
+  const router = useRouter();
   
   function toggleSelect(id: string){ setSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); }
   function toggleProject(projectId: string) {
@@ -35,55 +45,169 @@ export default function CartPage() {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [paying, setPaying] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
-  const [processingPayment, setProcessingPayment] = useState(false);
 
-  // ✅ Load data from localStorage and filter out demo cart items
+  // ✅ Load data from Supabase
   useEffect(() => {
-    const existing = localStorage.getItem(CART_KEY);
-    let loadedLines: CartLine[] = [];
-    
-    if (!existing || existing === "[]") {
-      loadedLines = [];
-    } else {
-      loadedLines = JSON.parse(existing);
-      // Filter out demo cart items (line_1, line_2, line_3)
-      loadedLines = loadedLines.filter((l: CartLine) => 
-        !['line_1', 'line_2', 'line_3'].includes(l.id)
-      );
-    }
-    
-    setLines(loadedLines);
-    // Initialize all items as selected
-    setSelectedIds(loadedLines.map((l: CartLine) => l.id));
-    setLoading(false);
+    loadCart();
   }, []);
 
+  async function loadCart() {
+    setLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      // First get cart items only
+      const { data: cartItemsOnly, error: cartError } = await supabase
+        .from('cart_items')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (cartError) {
+        console.error('Error fetching cart items:', cartError);
+        setLoading(false);
+        return;
+      }
+
+      console.log('Raw cart items from Supabase:', cartItemsOnly);
+
+      // Now try to get product details - first try from products table
+      let cartItems = cartItemsOnly;
+      
+      if (cartItemsOnly && cartItemsOnly.length > 0) {
+        // Try to get products for these cart items
+        const productIds = cartItemsOnly.map(item => item.product_id);
+        const { data: products, error: productsError } = await supabase
+          .from('products')
+          .select('id, name, selling_price, image_url')
+          .in('id', productIds);
+
+        console.log('Products from Supabase:', { products, productsError });
+
+        // Map cart items with product details
+        const loadedLines: CartLine[] = cartItemsOnly.map(item => {
+          // Try Supabase products first, then demo data
+          const supabaseProduct = products?.find(p => p.id === item.product_id);
+          const demoProduct = demoProductsAll.find(p => p.id === item.product_id);
+          const product = supabaseProduct || demoProduct;
+          
+          console.log(`Product for ${item.product_id}:`, { supabaseProduct, demoProduct, product });
+          
+          // Extract first image URL from potentially multiple URLs
+          let imageUrl = '';
+          if (supabaseProduct?.image_url) {
+            // Split by newlines and take first URL, clean it up
+            const urls = supabaseProduct.image_url.split('\n').filter(url => url.trim());
+            imageUrl = urls[0]?.trim() || '';
+          } else if (demoProduct?.imageUrl) {
+            imageUrl = demoProduct.imageUrl;
+          }
+          
+          return {
+            id: item.id,
+            productId: item.product_id,
+            qty: item.quantity,
+            projectId: item.project_id || undefined,
+            area: item.area || undefined,
+            price: supabaseProduct?.selling_price || demoProduct?.price || 0,
+            title: supabaseProduct?.name || demoProduct?.title || 'Unknown Product',
+            imageUrl,
+          };
+        });
+        
+        console.log('Final loaded lines:', loadedLines);
+        setLines(loadedLines);
+        setSelectedIds(loadedLines.map(l => l.id));
+      } else {
+        setLines([]);
+        setSelectedIds([]);
+      }
+    } catch (error) {
+      console.error('Error loading cart:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // helpers
-  function save(next: CartLine[]) {
-    setLines(next);
-    localStorage.setItem(CART_KEY, JSON.stringify(next));
+  async function remove(lineId: string) {
+    try {
+      // Optimistic update: remove from UI immediately
+      setLines(prev => prev.filter(l => l.id !== lineId));
+      setSelectedIds(prev => prev.filter(id => id !== lineId));
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase
+        .from('cart_items')
+        .delete()
+        .eq('id', lineId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Error removing item:', error);
+        // Reload on error to restore correct state
+        await loadCart();
+      }
+    } catch (error) {
+      console.error('Error removing item:', error);
+      // Reload on error to restore correct state
+      await loadCart();
+    }
   }
 
-  function remove(lineId: string) {
-    save(lines.filter((l) => l.id !== lineId));
+  async function changeQty(lineId: string, delta: number) {
+    try {
+      const line = lines.find(l => l.id === lineId);
+      if (!line) return;
+      
+      const newQty = Math.max(1, line.qty + delta);
+      
+      // Optimistic update: update UI immediately
+      setLines(prev => prev.map(l => 
+        l.id === lineId ? { ...l, qty: newQty } : l
+      ));
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { error } = await supabase
+        .from('cart_items')
+        .update({ quantity: newQty })
+        .eq('id', lineId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Error updating quantity:', error);
+        // Reload on error to restore correct state
+        await loadCart();
+      }
+    } catch (error) {
+      console.error('Error updating quantity:', error);
+      // Reload on error to restore correct state
+      await loadCart();
+    }
   }
 
-  function changeQty(lineId: string, delta: number) {
-    save(
-      lines.map((l) =>
-        l.id === lineId ? { ...l, qty: Math.max(1, l.qty + delta) } : l
-      )
-    );
-  }
-
-  function clearCart() {
-    save([]);
+  async function clearCart() {
+    try {
+      await cartService.clearCart();
+      await loadCart();
+    } catch (error) {
+      console.error('Error clearing cart:', error);
+    }
   }
 
   const view = useMemo(() => {
     return lines.map((l: any) => {
-      // Use stored product data from cart item, or fallback to demoProductsAll
+      // Use stored product data from cart item (from Supabase join), or fallback to demoProductsAll
       const product = l.price && l.title && l.imageUrl 
         ? { id: l.productId, price: l.price, title: l.title, imageUrl: l.imageUrl }
         : demoProductsAll.find((p) => p.id === l.productId);
@@ -123,78 +247,166 @@ export default function CartPage() {
     }, 0);
   }, [view, selectedIds]);
 
+  // Calculate tax (18% GST example)
+  const taxRate = 18;
+  const taxAmount = (subtotal * taxRate) / 100;
+  const total = subtotal + taxAmount;
+
   // ✅ Place Order with Razorpay
-  function placeOrder() {
+  async function placeOrder() {
     if (selectedIds.length === 0) return;
     
-    setProcessingPayment(true);
-    
-    // Load Razorpay script
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.async = true;
-    script.onload = () => initializeRazorpay();
-    script.onerror = () => {
-      setProcessingPayment(false);
-      alert('Failed to load Razorpay. Please try again.');
-    };
-    document.body.appendChild(script);
-  }
+    setPaying(true);
+    try {
+      // Get selected items
+      const selectedItems = lines.filter(l => selectedIds.includes(l.id));
+      
+      console.log('🛒 Selected items for payment:', selectedItems);
+      console.log('📍 Project IDs per item:', selectedItems.map(i => ({ id: i.productId, projectId: i.projectId })));
+      
+      // Get unique project IDs
+      const projectIds = [...new Set(selectedItems.map(l => l.projectId).filter(Boolean))];
+      
+      console.log('📋 Unique project IDs:', projectIds);
 
-  function initializeRazorpay() {
-    const selectedItems = lines.filter(l => selectedIds.includes(l.id));
-    
-    const options = {
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_YOUR_KEY_ID', // Replace with your Razorpay key
-      amount: subtotal * 100, // Amount in paise (multiply by 100)
-      currency: 'INR',
-      name: 'Design & Cart',
-      description: `Order for ${selectedItems.length} item${selectedItems.length > 1 ? 's' : ''}`,
-      image: '/logo.png', // Your logo URL
-      handler: function (response: any) {
-        // Payment successful
-        handlePaymentSuccess(response, selectedItems);
-      },
-      prefill: {
-        name: 'Customer Name',
-        email: 'customer@example.com',
-        contact: '9999999999'
-      },
-      theme: {
-        color: '#d96857'
-      },
-      modal: {
-        ondismiss: function() {
-          setProcessingPayment(false);
-        }
+      // Get user info for Razorpay
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!session) {
+        alert('Please log in to continue');
+        setPaying(false);
+        return;
       }
-    };
+      
+      // Create Razorpay order
+      const response = await fetch('/api/payment/create-order', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          amount: total,
+          subtotal: subtotal,
+          discount: 0,
+          discountType: 'none',
+          tax: taxAmount,
+          taxRate: taxRate,
+          currency: 'INR',
+          items: selectedItems,
+          projectIds,
+        }),
+      });
 
-    const rzp = new (window as any).Razorpay(options);
-    rzp.open();
-  }
+      const { orderId, amount, currency, dbOrderIds, error } = await response.json();
 
-  function handlePaymentSuccess(response: any, selectedItems: CartLine[]) {
-    // Save order with payment details
-    const orders = JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
-    const order = {
-      id: `ord_${Date.now()}`,
-      items: selectedItems,
-      total: subtotal,
-      status: 'Paid',
-      paymentId: response.razorpay_payment_id,
-      ts: Date.now(),
-    };
-    localStorage.setItem(ORDERS_KEY, JSON.stringify([order, ...orders]));
-    
-    // Remove selected items from cart
-    save(lines.filter(l => !selectedIds.includes(l.id)));
-    
-    // Clear selection
-    setSelectedIds([]);
-    setProcessingPayment(false);
-    
-    alert(`Payment successful! Payment ID: ${response.razorpay_payment_id}\nYou can review your order on the Orders page.`);
+      if (error) {
+        alert(error);
+        setPaying(false);
+        return;
+      }
+
+      // Initialize Razorpay checkout
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount,
+        currency,
+        name: 'Design&Cart',
+        description: 'Order Payment',
+        order_id: orderId,
+        prefill: {
+          name: user?.user_metadata?.full_name || user?.email?.split('@')[0] || '',
+          email: user?.email || '',
+        },
+        theme: {
+          color: '#d96857',
+        },
+        handler: async function (response: any) {
+          console.log('Payment successful from Razorpay, verifying...', response);
+          
+          try {
+            // Get session for auth
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            
+            if (!currentSession) {
+              console.error('No session found for payment verification');
+              alert('Session expired. Please refresh the page and check your orders.');
+              setPaying(false);
+              return;
+            }
+            
+            // Verify payment
+            console.log('Sending verification request...');
+            const verifyResponse = await fetch('/api/payment/verify', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentSession.access_token}`,
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                dbOrderIds, // Pass array of order IDs
+              }),
+            });
+
+            console.log('Verify response status:', verifyResponse.status);
+            
+            // Parse response
+            let verifyData;
+            try {
+              verifyData = await verifyResponse.json();
+              console.log('Verification response data:', verifyData);
+            } catch (parseError) {
+              console.error('Failed to parse verification response:', parseError);
+              alert('Payment completed but verification response was invalid. Please check your orders.');
+              setPaying(false);
+              return;
+            }
+
+            // Check if verification was successful
+            if (verifyResponse.ok && verifyData.success) {
+              console.log('✅ Payment verified successfully! Clearing cart and redirecting...');
+              
+              // Clear cart items BEFORE redirecting
+              try {
+                const clearResult = await cartService.clearCartItems(selectedIds);
+                console.log('Cart cleared:', clearResult);
+              } catch (err) {
+                console.warn('Cart clear failed (non-critical):', err);
+                // Continue with redirect even if cart clear fails
+              }
+              
+              // Redirect to orders page
+              window.location.href = `/orders?success=true`;
+              return;
+            } else {
+              console.error('Payment verification failed:', verifyData);
+              alert('Payment verification failed. Please contact support.');
+              setPaying(false);
+            }
+          } catch (err) {
+            console.error('Payment verification error:', err);
+            alert('An error occurred. Your payment may have been received. Please check your orders or contact support.');
+            setPaying(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setPaying(false);
+          },
+        },
+      };
+
+      const razorpay = new window.Razorpay(options);
+      razorpay.open();
+    } catch (err) {
+      console.error('Payment error:', err);
+      alert('Failed to initiate payment. Please try again.');
+      setPaying(false);
+    }
   }
 
   return (
@@ -465,26 +677,25 @@ export default function CartPage() {
                 </h2>
                 <div className="space-y-2 text-sm">
                   <Row label="Subtotal" value={`₹${subtotal.toLocaleString("en-IN")}`} />
-                  <Row label="Shipping" value="—" />
-                  <Row label="Tax" value="—" />
+                  <Row label="Tax (GST 18%)" value={`₹${taxAmount.toLocaleString("en-IN")}`} />
                   <div className="h-px bg-zinc-200 my-2" />
                   <Row
                     label="Total"
-                    value={`₹${subtotal.toLocaleString("en-IN")}`}
+                    value={`₹${total.toLocaleString("en-IN")}`}
                     strong
                   />
                 </div>
 
                 <Button
                   onClick={placeOrder} 
-                  disabled={selectedIds.length === 0 || processingPayment}
-                  className="mt-4 w-full bg-[#d96857] text-white rounded-2xl py-2 font-medium hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={selectedIds.length === 0 || paying}
+                  className="mt-4 w-full bg-[#d96857] text-white rounded-2xl py-2 font-medium hover:opacity-95 disabled:opacity-50"
                 >
-                  {processingPayment ? 'Processing...' : 'Proceed to Payment'}
+                  {paying ? 'Processing...' : 'Pay Now'}
                 </Button>
 
                 <p className="mt-2 text-[11px] text-zinc-500 text-center">
-                  This is a demo checkout. Orders will appear in the Orders page.
+                  Secure payment via Razorpay
                 </p>
               </div>
             </aside>
@@ -508,17 +719,27 @@ function Row({ label, value, strong = false }: { label: string; value: string; s
 
 function EmptyState() {
   return (
-    <div className="rounded-2xl border border-dashed border-zinc-300 p-10 text-center bg-white">
-      <div className="mx-auto w-28 h-28 rounded-full bg-[#f2f0ed] mb-4" />
-      <h2 className="text-lg font-semibold text-[#2e2e2e]">Your cart is empty</h2>
-      <p className="text-sm text-zinc-600 mt-1">
-        Browse products and add them to your project.
+    <div className="rounded-2xl border border-zinc-200 p-12 text-center bg-white shadow-sm">
+      {/* Shopping Cart Icon */}
+      <div className="mx-auto w-20 h-20 rounded-full bg-gradient-to-br from-[#d96857]/10 to-[#d96857]/5 flex items-center justify-center mb-5">
+        <svg className="w-10 h-10 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+        </svg>
+      </div>
+      
+      <h2 className="text-xl font-semibold text-[#2e2e2e] mb-2">Your cart is empty</h2>
+      <p className="text-sm text-zinc-500 mb-6 max-w-sm mx-auto">
+        Start adding products to your projects and they'll appear here
       </p>
+      
       <Link
         href="/products"
-        className="inline-flex mt-4 rounded-2xl bg-[#d96857] text-white text-sm font-medium px-4 py-2 hover:opacity-95"
+        className="inline-flex items-center gap-2 rounded-xl bg-[#d96857] text-white text-sm font-medium px-6 py-3 hover:bg-[#c85746] transition-colors shadow-sm"
       >
-        Go to Products
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+        </svg>
+        Browse Products
       </Link>
     </div>
   );

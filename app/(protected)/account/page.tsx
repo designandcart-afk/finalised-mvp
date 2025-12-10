@@ -8,15 +8,12 @@ type DesignerProfile = {
   name: string;
   email: string;
   phone: string;
-  studio: string;
-  experience: string;
-  specialization: string;
   address: string;
-  gstId?: string;
-  certificationId?: string;
-  reraId?: string;
+  specialization: 'Interior Designer' | 'Architect' | 'Civil Engineer' | 'Others';
+  experienceYears: number;
+  studioCompany: string;
+  gstNumber?: string;
   about: string;
-  portfolioUrl?: string;
   profilePic?: string;
 };
 
@@ -32,10 +29,8 @@ export default function AccountPage() {
   const saveProfile = async (updatedProfile: DesignerProfile) => {
     if (!user) return;
     const storageKey = isDemo ? PROFILE_KEY : `dc:designerProfile:${user.id}`;
-    localStorage.setItem(storageKey, JSON.stringify(updatedProfile));
-    setProfile(updatedProfile);
-
-    // Upsert to Supabase designer_details table
+    
+    // Save to Supabase designer_details table first
     try {
       const { supabase } = await import('@/lib/supabase');
       const { error } = await supabase
@@ -44,21 +39,29 @@ export default function AccountPage() {
           user_id: user.id,
           name: updatedProfile.name,
           email: updatedProfile.email,
-          profile_pic: updatedProfile.profilePic,
+          phone: updatedProfile.phone || null,
+          address: updatedProfile.address || null,
           specialization: updatedProfile.specialization,
-          studio: updatedProfile.studio,
-          phone: updatedProfile.phone,
-          address: updatedProfile.address,
-          experience: updatedProfile.experience,
-          gst_id: updatedProfile.gstId,
-          about: updatedProfile.about
+          experience: updatedProfile.experienceYears.toString() + ' years',
+          studio: updatedProfile.studioCompany || null,
+          gst_id: updatedProfile.gstNumber || null,
+          about: updatedProfile.about || null,
+          profile_pic: updatedProfile.profilePic || null,
         }, { onConflict: 'user_id' });
+      
       if (error) {
-        // Optionally show error to user
-        console.error('Failed to save profile to Supabase:', error.message);
+        console.error('Failed to save profile to Supabase:', error);
+        alert(`Failed to save profile: ${error.message}`);
+        return;
       }
+      
+      // Only update local state if Supabase save was successful
+      localStorage.setItem(storageKey, JSON.stringify(updatedProfile));
+      setProfile(updatedProfile);
+      console.log('Profile saved successfully');
     } catch (err) {
       console.error('Supabase upsert error:', err);
+      alert('Failed to save profile. Please try again.');
     }
   };
 
@@ -79,24 +82,19 @@ export default function AccountPage() {
           name: "Demo Designer",
           email: "demo@designandcart.in",
           phone: "+91 98765 43210",
-          studio: "De'Artisa Designs LLP",
-          experience: "6 years",
-          specialization: "Residential & Commercial Interiors",
           address: "HSR Layout, Bengaluru, Karnataka",
-          gstId: "29ABCDE1234F2Z5",
-          certificationId: "INT-000923",
-          reraId: "RERA-KA-12345",
-          about:
-            "A passionate interior designer focused on modern, sustainable design. Helping clients visualize and implement spaces with real, purchasable products.",
-          portfolioUrl: "https://designandcart.in/portfolio/demo",
-          profilePic:
-            "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=800&auto=format&fit=crop",
+          specialization: "Interior Designer",
+          experienceYears: 6,
+          studioCompany: "De'Artisa Designs LLP",
+          gstNumber: "29ABCDE1234F2Z5",
+          about: "A passionate interior designer focused on modern, sustainable design. Helping clients visualize and implement spaces with real, purchasable products.",
+          profilePic: "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=800&auto=format&fit=crop",
         };
         localStorage.setItem(PROFILE_KEY, JSON.stringify(demo));
         setProfile(demo);
       }
     } else {
-      // Real user - try to fetch profile from Supabase first
+      // Real user - fetch profile from Supabase
       const fetchProfile = async () => {
         const userProfileKey = `dc:designerProfile:${user.id}`;
         try {
@@ -106,24 +104,26 @@ export default function AccountPage() {
             .select('*')
             .eq('user_id', user.id)
             .single();
+          
           if (error) {
             console.warn('Supabase fetch error:', error.message);
           }
+          
           if (data) {
+            // Parse experience years from text (e.g., "5 years" -> 5)
+            const experienceYears = data.experience ? parseInt(data.experience) || 0 : 0;
+            
             // Map Supabase data to DesignerProfile
             const loadedProfile: DesignerProfile = {
               name: data.name || '',
               email: data.email || '',
               phone: data.phone || '',
-              studio: data.studio || '',
-              experience: data.experience || '',
-              specialization: data.specialization || '',
               address: data.address || '',
-              gstId: data.gst_id || '',
-              certificationId: data.certification_id || '',
-              reraId: data.rera_id || '',
+              specialization: data.specialization || 'Interior Designer',
+              experienceYears: experienceYears,
+              studioCompany: data.studio || '',
+              gstNumber: data.gst_id || '',
               about: data.about || '',
-              portfolioUrl: data.portfolio_url || '',
               profilePic: data.profile_pic || '',
             };
             setProfile(loadedProfile);
@@ -133,7 +133,8 @@ export default function AccountPage() {
         } catch (err) {
           console.error('Error fetching profile from Supabase:', err);
         }
-        // Fallback to localStorage if Supabase fetch fails or no data
+        
+        // Fallback to localStorage or create new profile
         const existing = localStorage.getItem(userProfileKey);
         if (existing) {
           setProfile(JSON.parse(existing) as DesignerProfile);
@@ -143,10 +144,10 @@ export default function AccountPage() {
             name: (user as any).user_metadata?.full_name || (user as any).name || 'Designer',
             email: user.email || '',
             phone: '',
-            studio: '',
-            experience: '',
-            specialization: 'Interior Design',
             address: '',
+            specialization: 'Interior Designer',
+            experienceYears: 0,
+            studioCompany: '',
             about: 'Welcome to Design & Cart! Complete your profile to showcase your expertise.',
           };
           localStorage.setItem(userProfileKey, JSON.stringify(newProfile));
@@ -169,10 +170,10 @@ export default function AccountPage() {
 
   return (
     <main className="min-h-screen bg-white">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="h-9 w-1.5 rounded-full bg-[#d96857]" />
-          <h1 className="text-2xl font-semibold text-[#2e2e2e]">Account</h1>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+        <div className="flex items-center gap-3 mb-8">
+          <div className="h-10 w-1.5 rounded-full bg-[#d96857]" />
+          <h1 className="text-3xl font-bold text-[#d96857] tracking-tight">Account</h1>
         </div>
 
         <ProfileCard profile={profile} onSave={saveProfile} isDemo={isDemo} />
@@ -211,10 +212,11 @@ function ProfileCard({
   };
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <div className="flex flex-col items-center justify-center">
-          <div className="relative w-24 h-24 rounded-full overflow-hidden border-4 border-[#f2f0ed] mb-2">
+      {/* Header Profile Card */}
+      <div className="bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 rounded-2xl border border-[#d96857]/20 p-8 shadow-md">
+        <div className="flex items-start gap-6">
+          <div className="flex flex-col items-center">
+            <div className="relative w-32 h-32 rounded-full overflow-hidden border-4 border-white shadow-lg ring-2 ring-[#d96857]/20">
             <img
               src={isProfileEditing ? (editedProfile.profilePic || "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=800&auto=format&fit=crop") : (profile.profilePic || "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=800&auto=format&fit=crop")}
               alt="Profile picture"
@@ -230,25 +232,44 @@ function ProfileCard({
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    const { supabase } = await import('@/lib/supabase');
-                    const fileExt = file.name.split('.').pop();
-                    const fileName = `profile_${Date.now()}.${fileExt}`;
-                    const { data, error } = await supabase.storage.from('avatars').upload(fileName, file, { upsert: true });
-                    if (!error && data) {
-                      const { publicURL } = supabase.storage.from('avatars').getPublicUrl(data.path).data;
-                      setEditedProfile(prev => ({ ...prev, profilePic: publicURL }));
-                    } else {
-                      alert('Failed to upload image');
+                    
+                    try {
+                      const { supabase } = await import('@/lib/supabase');
+                      const fileExt = file.name.split('.').pop();
+                      const fileName = `profile_${Date.now()}.${fileExt}`;
+                      
+                      // Upload to chat-files bucket (which we know exists)
+                      const { data, error } = await supabase.storage
+                        .from('chat-files')
+                        .upload(`avatars/${fileName}`, file, { upsert: true });
+                      
+                      if (error) {
+                        console.error('Upload error:', error);
+                        alert(`Failed to upload image: ${error.message}`);
+                        return;
+                      }
+                      
+                      if (data) {
+                        // Get public URL
+                        const { data: { publicUrl } } = supabase.storage
+                          .from('chat-files')
+                          .getPublicUrl(data.path);
+                        
+                        setEditedProfile(prev => ({ ...prev, profilePic: publicUrl }));
+                      }
+                    } catch (err) {
+                      console.error('Upload error:', err);
+                      alert('Failed to upload image. Please try again.');
                     }
                   }}
                 />
                 <button
                   type="button"
                   onClick={() => document.getElementById('profile-pic-upload')?.click()}
-                  className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-white bg-opacity-80 rounded-full p-1 shadow hover:bg-opacity-100 transition"
+                  className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-white rounded-full p-2 shadow-md hover:shadow-lg transition-all hover:scale-105"
                   aria-label="Change profile picture"
                 >
-                  <FiCamera size={20} className="text-[#d96857]" />
+                  <FiCamera size={18} className="text-[#d96857]" />
                 </button>
               </>
             )}
@@ -260,28 +281,31 @@ function ProfileCard({
               type="text"
               value={editedProfile.name}
               onChange={(e) => setEditedProfile(prev => ({ ...prev, name: e.target.value }))}
-              className="text-xl font-semibold text-[#2e2e2e] border border-zinc-300 rounded px-2 py-1 w-full"
+              className="text-2xl font-bold text-[#2e2e2e] border border-[#2e2e2e]/20 rounded-xl px-4 py-2.5 w-full mb-3 focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857]"
+              placeholder="Full Name"
             />
           ) : (
-            <h2 className="text-xl font-semibold text-[#2e2e2e]">
+            <h2 className="text-2xl font-bold text-[#2e2e2e] mb-1">
               {profile.name}
             </h2>
           )}
-          <p className="text-sm text-zinc-600">{isProfileEditing ? editedProfile.specialization : profile.specialization}</p>
-          <p className="text-sm text-zinc-600">{isProfileEditing ? editedProfile.studio : profile.studio}</p>
+          <p className="text-base text-[#2e2e2e]/70 font-medium mb-1">{isProfileEditing ? editedProfile.specialization : profile.specialization}</p>
+          {(profile.studioCompany || isProfileEditing) && (
+            <p className="text-sm text-[#2e2e2e]/60">{isProfileEditing ? editedProfile.studioCompany : profile.studioCompany}</p>
+          )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-3 items-start">
           {isProfileEditing ? (
             <>
               <button
                 onClick={handleSave}
-                className="px-3 py-1 bg-[#d96857] text-white rounded text-sm hover:bg-[#d96857]/90"
+                className="px-5 py-2.5 bg-[#d96857] text-white rounded-xl text-sm hover:opacity-90 transition-all font-semibold shadow-sm hover:shadow-md"
               >
                 Save
               </button>
               <button
                 onClick={handleCancel}
-                className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                className="px-5 py-2.5 bg-white text-[#2e2e2e] border border-[#2e2e2e]/10 rounded-xl text-sm hover:bg-[#2e2e2e]/5 transition-colors font-semibold"
               >
                 Cancel
               </button>
@@ -289,96 +313,181 @@ function ProfileCard({
           ) : (
             <button
               onClick={() => setEditingSection('profile')}
-              className="px-3 py-1 text-[#d96857] border border-[#d96857] rounded text-sm hover:bg-[#d96857]/10"
+              className="px-5 py-2.5 text-[#d96857] border-2 border-[#d96857] rounded-xl text-sm hover:bg-[#d96857]/10 transition-all font-semibold"
             >
               Edit Profile
             </button>
           )}
         </div>
+        </div>
       </div>
 
-      {/* Contact */}
+      {/* Contact Information */}
       <Section title="Contact Information" showEdit onEdit={() => setEditingSection('contact')}>
         <Grid>
-          <Info label="Email" value={editingSection === 'contact' ? (
-            <input type="email" value={editedProfile.email} onChange={e => setEditedProfile(prev => ({ ...prev, email: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.email} />
-          <Info label="Phone" value={editingSection === 'contact' ? (
-            <input type="text" value={editedProfile.phone} onChange={e => setEditedProfile(prev => ({ ...prev, phone: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.phone} />
-          <Info label="Address" value={editingSection === 'contact' ? (
-            <input type="text" value={editedProfile.address} onChange={e => setEditedProfile(prev => ({ ...prev, address: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.address} />
-          <Info label="Experience" value={editingSection === 'contact' ? (
-            <input type="text" value={editedProfile.experience} onChange={e => setEditedProfile(prev => ({ ...prev, experience: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.experience} />
+          {editingSection === 'contact' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Email</div>
+              <input 
+                type="email" 
+                value={editedProfile.email} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, email: e.target.value }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white" 
+                placeholder="your@email.com"
+              />
+            </div>
+          ) : (
+            <Info 
+              label="Email" 
+              value={profile.email} 
+            />
+          )}
+          {editingSection === 'contact' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Phone</div>
+              <input 
+                type="tel" 
+                value={editedProfile.phone} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, phone: e.target.value }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white" 
+                placeholder="+91 98765 43210"
+              />
+            </div>
+          ) : (
+            <Info 
+              label="Phone" 
+              value={profile.phone} 
+            />
+          )}
+          <div className="sm:col-span-2">
+            {editingSection === 'contact' ? (
+              <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+                <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Address</div>
+                <textarea 
+                  value={editedProfile.address} 
+                  onChange={e => setEditedProfile(prev => ({ ...prev, address: e.target.value }))} 
+                  className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white resize-none" 
+                  placeholder="Your full address"
+                />
+              </div>
+            ) : (
+              <Info 
+                label="Address" 
+                value={profile.address} 
+              />
+            )}
+          </div>
         </Grid>
         {editingSection === 'contact' && (
-          <div className="flex gap-2 mt-4">
-            <button onClick={handleSave} className="px-3 py-1 bg-[#d96857] text-white rounded text-sm hover:bg-[#d96857]/90">Save</button>
-            <button onClick={handleCancel} className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Cancel</button>
+          <div className="flex gap-3 mt-5">
+            <button onClick={handleSave} className="px-5 py-2.5 bg-[#d96857] text-white rounded-xl text-sm hover:opacity-90 transition-all font-semibold shadow-sm hover:shadow-md">Save</button>
+            <button onClick={handleCancel} className="px-5 py-2.5 bg-white text-[#2e2e2e] border border-[#2e2e2e]/10 rounded-xl text-sm hover:bg-[#2e2e2e]/5 transition-colors font-semibold">Cancel</button>
           </div>
         )}
       </Section>
 
-      {/* Professional */}
+      {/* Professional Details */}
       <Section title="Professional Details" solid showEdit onEdit={() => setEditingSection('professional')}>
         <Grid>
-          <Info label="Studio / Company" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.studio} onChange={e => setEditedProfile(prev => ({ ...prev, studio: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.studio} />
-          <Info label="Specialization" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.specialization} onChange={e => setEditedProfile(prev => ({ ...prev, specialization: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.specialization} />
-          <Info label="GST ID" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.gstId || ''} onChange={e => setEditedProfile(prev => ({ ...prev, gstId: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : (profile.gstId || "-")} />
-          <Info label="Certification ID" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.certificationId || ''} onChange={e => setEditedProfile(prev => ({ ...prev, certificationId: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : (profile.certificationId || "-")} />
-          <Info label="RERA ID" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.reraId || ''} onChange={e => setEditedProfile(prev => ({ ...prev, reraId: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : (profile.reraId || "-")} />
-          <Info label="Portfolio" value={editingSection === 'professional' ? (
-            <input type="text" value={editedProfile.portfolioUrl || ''} onChange={e => setEditedProfile(prev => ({ ...prev, portfolioUrl: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm" />
-          ) : profile.portfolioUrl} link />
+          {editingSection === 'professional' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Specialization</div>
+              <select 
+                value={editedProfile.specialization} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, specialization: e.target.value as any }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857]"
+              >
+                <option value="Interior Designer">Interior Designer</option>
+                <option value="Architect">Architect</option>
+                <option value="Civil Engineer">Civil Engineer</option>
+                <option value="Others">Others</option>
+              </select>
+            </div>
+          ) : (
+            <Info 
+              label="Specialization" 
+              value={profile.specialization} 
+            />
+          )}
+          {editingSection === 'professional' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Experience (in years)</div>
+              <input 
+                type="number" 
+                min="0"
+                value={editedProfile.experienceYears} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, experienceYears: parseInt(e.target.value) || 0 }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white" 
+                placeholder="e.g., 5"
+              />
+            </div>
+          ) : (
+            <Info 
+              label="Experience (in years)" 
+              value={`${profile.experienceYears} years`} 
+            />
+          )}
+          {editingSection === 'professional' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">Studio / Company (if any)</div>
+              <input 
+                type="text" 
+                value={editedProfile.studioCompany} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, studioCompany: e.target.value }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white" 
+                placeholder="Your studio name"
+              />
+            </div>
+          ) : (
+            <Info 
+              label="Studio / Company (if any)" 
+              value={profile.studioCompany || "-"} 
+            />
+          )}
+          {editingSection === 'professional' ? (
+            <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+              <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">GST Number (Optional)</div>
+              <input 
+                type="text" 
+                value={editedProfile.gstNumber || ''} 
+                onChange={e => setEditedProfile(prev => ({ ...prev, gstNumber: e.target.value }))} 
+                className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white" 
+                placeholder="29ABCDE1234F2Z5"
+              />
+            </div>
+          ) : (
+            <Info 
+              label="GST Number (Optional)" 
+              value={profile.gstNumber || "-"} 
+            />
+          )}
         </Grid>
         {editingSection === 'professional' && (
-          <div className="flex gap-2 mt-4">
-            <button onClick={handleSave} className="px-3 py-1 bg-[#d96857] text-white rounded text-sm hover:bg-[#d96857]/90">Save</button>
-            <button onClick={handleCancel} className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Cancel</button>
+          <div className="flex gap-3 mt-5">
+            <button onClick={handleSave} className="px-5 py-2.5 bg-[#d96857] text-white rounded-xl text-sm hover:opacity-90 transition-all font-semibold shadow-sm hover:shadow-md">Save</button>
+            <button onClick={handleCancel} className="px-5 py-2.5 bg-white text-[#2e2e2e] border border-[#2e2e2e]/10 rounded-xl text-sm hover:bg-[#2e2e2e]/5 transition-colors font-semibold">Cancel</button>
           </div>
         )}
       </Section>
 
-      {/* About */}
+      {/* About Designer */}
       <Section title="About Designer" solid showEdit onEdit={() => setEditingSection('about')}>
         {editingSection === 'about' ? (
-          <textarea value={editedProfile.about} onChange={e => setEditedProfile(prev => ({ ...prev, about: e.target.value }))} className="w-full border border-zinc-300 rounded px-2 py-1 text-sm min-h-[60px]" />
+          <textarea 
+            value={editedProfile.about} 
+            onChange={e => setEditedProfile(prev => ({ ...prev, about: e.target.value }))} 
+            className="w-full border border-[#2e2e2e]/20 rounded-xl px-3 py-2 text-sm min-h-[120px] focus:outline-none focus:ring-2 focus:ring-[#d96857]/30 focus:border-[#d96857] bg-white resize-none" 
+            placeholder="Tell us about yourself and your work..."
+          />
         ) : (
-          <p className="text-sm text-[#2e2e2e] leading-relaxed whitespace-pre-line">
+          <p className="text-[15px] text-[#2e2e2e] leading-relaxed whitespace-pre-line">
             {profile.about}
           </p>
         )}
         {editingSection === 'about' && (
-          <div className="flex gap-2 mt-4">
-            <button onClick={handleSave} className="px-3 py-1 bg-[#d96857] text-white rounded text-sm hover:bg-[#d96857]/90">Save</button>
-            <button onClick={handleCancel} className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Cancel</button>
-          </div>
-        )}
-      </Section>
-
-      {/* Certificates (static placeholders for demo) */}
-      <Section title="Certificates / IDs" showEdit onEdit={() => setEditingSection('certificates')}>
-        <ul className="list-disc list-inside text-sm text-[#2e2e2e] space-y-1">
-          <li>Interior Design Certification — IDA (2019)</li>
-          <li>3D Visualization Pro Certificate — Autodesk (2021)</li>
-          <li>Registered with Indian Institute of Interior Designers</li>
-        </ul>
-        {editingSection === 'certificates' && (
-          <div className="flex gap-2 mt-4">
-            <button onClick={handleSave} className="px-3 py-1 bg-[#d96857] text-white rounded text-sm hover:bg-[#d96857]/90">Save</button>
-            <button onClick={handleCancel} className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Cancel</button>
+          <div className="flex gap-3 mt-5">
+            <button onClick={handleSave} className="px-5 py-2.5 bg-[#d96857] text-white rounded-xl text-sm hover:opacity-90 transition-all font-semibold shadow-sm hover:shadow-md">Save</button>
+            <button onClick={handleCancel} className="px-5 py-2.5 bg-white text-[#2e2e2e] border border-[#2e2e2e]/10 rounded-xl text-sm hover:bg-[#2e2e2e]/5 transition-colors font-semibold">Cancel</button>
           </div>
         )}
       </Section>
@@ -403,19 +512,19 @@ function Section({
 }) {
   return (
     <section
-      className={`rounded-2xl border border-zinc-200 p-5 ${
-        solid ? "bg-white shadow-sm" : "bg-[#f2f0ed]"
+      className={`rounded-2xl border border-[#2e2e2e]/10 p-7 ${
+        solid ? "bg-[#f5f5f5] shadow-md" : "bg-[#fafafa] shadow-sm"
       }`}
     >
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-[#2e2e2e]">{title}</h3>
+      <div className="flex items-center justify-between mb-5">
+        <h3 className="text-base font-bold text-[#d96857] tracking-tight">{title}</h3>
         {showEdit && (
           <button
             onClick={onEdit}
-            className="ml-2 p-1 rounded hover:bg-zinc-100 text-[#d96857]"
+            className="ml-2 p-2.5 rounded-xl hover:bg-[#d96857]/10 text-[#d96857] transition-all hover:scale-105"
             aria-label={`Edit ${title}`}
           >
-            <FiEdit2 size={18} />
+            <FiEdit2 size={19} />
           </button>
         )}
       </div>
@@ -425,7 +534,7 @@ function Section({
 }
 
 function Grid({ children }: { children: React.ReactNode }) {
-  return <div className="grid sm:grid-cols-2 gap-3">{children}</div>;
+  return <div className="grid sm:grid-cols-2 gap-5">{children}</div>;
 }
 
 function Info({
@@ -438,8 +547,8 @@ function Info({
   link?: boolean;
 }) {
   return (
-    <div>
-      <div className="text-xs text-zinc-500 mb-0.5">{label}</div>
+    <div className="bg-white/50 rounded-lg p-3 border border-[#2e2e2e]/5">
+      <div className="text-xs text-[#2e2e2e]/60 mb-1.5 font-semibold uppercase tracking-wider">{label}</div>
       {value ? (
         link ? (
           <a
@@ -451,10 +560,10 @@ function Info({
             {value}
           </a>
         ) : (
-          <div className="text-sm text-[#2e2e2e]">{value}</div>
+          <div className="text-[15px] text-[#2e2e2e] font-medium">{value}</div>
         )
       ) : (
-        <div className="text-sm text-zinc-400">—</div>
+        <div className="text-[15px] text-[#2e2e2e]/30">—</div>
       )}
     </div>
   );
