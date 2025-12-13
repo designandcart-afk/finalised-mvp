@@ -60,8 +60,9 @@ class DatabaseService {
   async createProject(projectData: any): Promise<any> {
     // Import supabase client
     const { supabase } = await import('../supabase');
-    // Generate a random project_code if not provided
-    const project_code = projectData.project_code || `PID${Math.floor(100000 + Math.random() * 900000)}`;
+    // Generate a random project_code in format #DAC-XXXXXX
+    const randomCode = Math.random().toString(36).substr(2, 6).toUpperCase();
+    const project_code = projectData.project_code || `#DAC-${randomCode}`;
     // Accept areas as array (from frontend)
     const areas = Array.isArray(projectData.areas)
       ? projectData.areas.filter((a: string) => !!a && a.trim())
@@ -70,6 +71,7 @@ class DatabaseService {
       project_name: projectData.project_name,
       scope_of_work: projectData.scope_of_work,
       address_full: projectData.address_full,
+      pincode: projectData.pincode,
       notes: projectData.notes,
       user_id: projectData.user_id,
       project_folder_url: projectData.project_folder_url,

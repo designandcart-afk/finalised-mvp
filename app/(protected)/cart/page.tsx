@@ -2,10 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { demoProductsAll, demoProjects, demoCart } from "@/lib/demoData";
 import { Button } from "@/components/UI";
 import { useProjects } from "@/lib/contexts/projectsContext";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 
 type CartLine = {
   id: string;
@@ -20,6 +28,7 @@ const ORDERS_KEY = "dc:orders";
 
 export default function CartPage() {
   const { projects } = useProjects();
+  const router = useRouter();
   
   function toggleSelect(id: string){ setSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); }
   function toggleProject(projectId: string) {
@@ -35,8 +44,8 @@ export default function CartPage() {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [paying, setPaying] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
-  const [processingPayment, setProcessingPayment] = useState(false);
 
   // ✅ Load data from localStorage and filter out demo cart items
   useEffect(() => {
@@ -124,77 +133,123 @@ export default function CartPage() {
   }, [view, selectedIds]);
 
   // ✅ Place Order with Razorpay
-  function placeOrder() {
+  async function placeOrder() {
     if (selectedIds.length === 0) return;
     
-    setProcessingPayment(true);
-    
-    // Load Razorpay script
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.async = true;
-    script.onload = () => initializeRazorpay();
-    script.onerror = () => {
-      setProcessingPayment(false);
-      alert('Failed to load Razorpay. Please try again.');
-    };
-    document.body.appendChild(script);
-  }
+    setPaying(true);
+    try {
+      // Get selected items
+      const selectedItems = lines.filter(l => selectedIds.includes(l.id));
+      
+      // Get unique project IDs
+      const projectIds = [...new Set(selectedItems.map(l => l.projectId).filter(Boolean))];
 
-  function initializeRazorpay() {
-    const selectedItems = lines.filter(l => selectedIds.includes(l.id));
-    
-    const options = {
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_YOUR_KEY_ID', // Replace with your Razorpay key
-      amount: subtotal * 100, // Amount in paise (multiply by 100)
-      currency: 'INR',
-      name: 'Design & Cart',
-      description: `Order for ${selectedItems.length} item${selectedItems.length > 1 ? 's' : ''}`,
-      image: '/logo.png', // Your logo URL
-      handler: function (response: any) {
-        // Payment successful
-        handlePaymentSuccess(response, selectedItems);
-      },
-      prefill: {
-        name: 'Customer Name',
-        email: 'customer@example.com',
-        contact: '9999999999'
-      },
-      theme: {
-        color: '#d96857'
-      },
-      modal: {
-        ondismiss: function() {
-          setProcessingPayment(false);
-        }
+      // Get user info for Razorpay
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!session) {
+        alert('Please log in to continue');
+        setPaying(false);
+        return;
       }
-    };
+      
+      // Create Razorpay order
+      const response = await fetch('/api/payment/create-order', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          amount: subtotal,
+          currency: 'INR',
+          items: selectedItems,
+          projectIds,
+        }),
+      });
 
-    const rzp = new (window as any).Razorpay(options);
-    rzp.open();
-  }
+      const { orderId, amount, currency, dbOrderId, error } = await response.json();
 
-  function handlePaymentSuccess(response: any, selectedItems: CartLine[]) {
-    // Save order with payment details
-    const orders = JSON.parse(localStorage.getItem(ORDERS_KEY) || '[]');
-    const order = {
-      id: `ord_${Date.now()}`,
-      items: selectedItems,
-      total: subtotal,
-      status: 'Paid',
-      paymentId: response.razorpay_payment_id,
-      ts: Date.now(),
-    };
-    localStorage.setItem(ORDERS_KEY, JSON.stringify([order, ...orders]));
-    
-    // Remove selected items from cart
-    save(lines.filter(l => !selectedIds.includes(l.id)));
-    
-    // Clear selection
-    setSelectedIds([]);
-    setProcessingPayment(false);
-    
-    alert(`Payment successful! Payment ID: ${response.razorpay_payment_id}\nYou can review your order on the Orders page.`);
+      if (error) {
+        alert(error);
+        setPaying(false);
+        return;
+      }
+
+      // Initialize Razorpay checkout
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount,
+        currency,
+        name: 'Design&Cart',
+        description: 'Order Payment',
+        order_id: orderId,
+        prefill: {
+          name: user?.user_metadata?.full_name || user?.email?.split('@')[0] || '',
+          email: user?.email || '',
+        },
+        notes: {
+          company: 'DESYNKART TECHNOLOGIES PRIVATE LIMITED',
+          brand: 'Design&Cart',
+          year: '2025',
+        },
+        theme: {
+          color: '#d96857',
+        },
+        handler: async function (response: any) {
+          try {
+            // Get session for auth
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            
+            // Verify payment
+            const verifyResponse = await fetch('/api/payment/verify', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': currentSession ? `Bearer ${currentSession.access_token}` : '',
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                dbOrderId,
+              }),
+            });
+
+            const verifyData = await verifyResponse.json();
+
+            if (verifyData.success) {
+              // Clear cart
+              save(lines.filter(l => !selectedIds.includes(l.id)));
+              setSelectedIds([]);
+              
+              // Redirect to orders page
+              router.push(`/orders?success=true&orderId=${dbOrderId}`);
+            } else {
+              alert('Payment verification failed. Please contact support.');
+            }
+          } catch (err) {
+            console.error('Payment verification error:', err);
+            alert('Payment verification failed. Please contact support.');
+          } finally {
+            setPaying(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setPaying(false);
+          },
+        },
+      };
+
+      const razorpay = new window.Razorpay(options);
+      razorpay.open();
+    } catch (err) {
+      console.error('Payment error:', err);
+      alert('Failed to initiate payment. Please try again.');
+      setPaying(false);
+    }
   }
 
   return (
@@ -477,20 +532,32 @@ export default function CartPage() {
 
                 <Button
                   onClick={placeOrder} 
-                  disabled={selectedIds.length === 0 || processingPayment}
-                  className="mt-4 w-full bg-[#d96857] text-white rounded-2xl py-2 font-medium hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={selectedIds.length === 0 || paying}
+                  className="mt-4 w-full bg-[#d96857] text-white rounded-2xl py-2 font-medium hover:opacity-95 disabled:opacity-50"
                 >
-                  {processingPayment ? 'Processing...' : 'Proceed to Payment'}
+                  {paying ? 'Processing...' : 'Pay Now'}
                 </Button>
 
                 <p className="mt-2 text-[11px] text-zinc-500 text-center">
-                  This is a demo checkout. Orders will appear in the Orders page.
+                  Secure payment via Razorpay
                 </p>
               </div>
             </aside>
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      <footer className="border-t border-zinc-200 bg-white mt-12">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+          <p className="text-center text-xs text-zinc-600">
+            © 2025 DESYNKART TECHNOLOGIES PRIVATE LIMITED
+          </p>
+          <p className="text-center text-xs text-zinc-500 mt-1">
+            Brand: Design&Cart
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }

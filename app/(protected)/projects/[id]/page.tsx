@@ -2,7 +2,7 @@
 
 import AuthGuard from "@/components/AuthGuard";
 import { useParams, useRouter } from "next/navigation";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   demoProjects,
   demoRenders,
@@ -21,6 +21,11 @@ import { storage, type ChatMessage as StorageChatMessage } from "@/lib/storage";
 import { uploadFiles, UploadError, type UploadedFile } from "@/lib/uploadAdapter";
 import { meetingService } from "@/lib/meetingService";
 
+// Lazy load heavy components for better initial load performance
+const AreaCard = lazy(() => import("@/components/project/AreaCard"));
+const ProductsList = lazy(() => import("@/components/project/ProductsList"));
+const ImageLightbox = lazy(() => import("@/components/project/ImageLightbox"));
+
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id as string;
@@ -32,11 +37,22 @@ export default function ProjectDetailPage() {
     return getProject(projectId) ?? (demoProjects ?? []).find((p) => p.id === projectId);
   }, [projectId, getProject]);
 
+  // Memoize isDemoProject check - used in many places
+  const isDemoProject = useMemo(() => project?.id?.startsWith('demo_') ?? false, [project?.id]);
+
   // All hooks must be called before any early returns
   const [openArea, setOpenArea] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [meetOpen, setMeetOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [finalFilesOpen, setFinalFilesOpen] = useState(false);
+  const [scheduleMeetingOpen, setScheduleMeetingOpen] = useState(false);
+  const [meetingDate, setMeetingDate] = useState("");
+  const [meetingTime, setMeetingTime] = useState("");
+  const [meetingSummaries, setMeetingSummaries] = useState<any[]>([]);
+  const [isLoadingMeetings, setIsLoadingMeetings] = useState(false);
+  const [feedbackModal, setFeedbackModal] = useState<{ open: boolean; meetingId: string } | null>(null);
+  const [feedbackText, setFeedbackText] = useState("");
   const [activeTab, setActiveTab] = useState<Record<string, 'renders' | 'screenshots'>>({});
   const [activeSlides, setActiveSlides] = useState<Record<string, { renders: number; screenshots: number }>>({});
   const [approvalStatus, setApprovalStatus] = useState<Record<string, {
@@ -55,6 +71,163 @@ export default function ProjectDetailPage() {
   const [chatText, setChatText] = useState("");
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  // Load meeting summaries
+  useEffect(() => {
+    const loadMeetingSummaries = async () => {
+      if (!projectId) return;
+      
+      setIsLoadingMeetings(true);
+      try {
+        const { data, error } = await supabase
+          .from('meeting_summaries')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('meeting_date', { ascending: false });
+        
+        if (error) {
+          console.error('Error loading meeting summaries:', error);
+          // If table doesn't exist, use demo data
+          if (error.code === 'PGRST116' || error.message.includes('does not exist')) {
+            setMeetingSummaries([
+              {
+                id: 'demo-1',
+                project_id: projectId,
+                meeting_name: 'Initial Design Discussion',
+                meeting_date: '2025-12-01',
+                mom_points: [
+                  'Discussed color palette preferences - client prefers warm tones',
+                  'Confirmed budget allocation for living room renovation',
+                  'Selected 3 initial design concepts for further development',
+                  'Next meeting scheduled to review mood boards'
+                ],
+                status: 'pending',
+                client_feedback: null
+              },
+              {
+                id: 'demo-2',
+                project_id: projectId,
+                meeting_name: 'Material Selection Review',
+                meeting_date: '2025-11-28',
+                mom_points: [
+                  'Reviewed flooring options - hardwood vs engineered wood',
+                  'Discussed sustainable material alternatives',
+                  'Client requested samples for marble countertop options',
+                  'Confirmed timeline for material procurement'
+                ],
+                status: 'approved',
+                client_feedback: null
+              }
+            ]);
+          }
+        } else {
+          console.log('Loaded meeting summaries:', data);
+          setMeetingSummaries(data || []);
+        }
+      } catch (error) {
+        console.error('Error loading meeting summaries:', error);
+      } finally {
+        setIsLoadingMeetings(false);
+      }
+    };
+
+    if (meetOpen) {
+      loadMeetingSummaries();
+    }
+  }, [projectId, meetOpen]);
+
+  // Listen for new meeting summaries and send chat notifications
+  useEffect(() => {
+    if (!projectId || project?.id.startsWith('demo_')) return;
+
+    console.log('Setting up polling for new meeting summaries:', projectId);
+
+    let lastCheck = Date.now();
+    
+    // Only poll when tab is visible to save resources
+    const checkVisibility = () => document.visibilityState === 'visible';
+    
+    // Check for new meeting summaries every 30 seconds
+    const interval = setInterval(async () => {
+      // Skip if tab is not visible
+      if (!checkVisibility()) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('meeting_summaries')
+          .select('*')
+          .eq('project_id', projectId)
+          .gt('created_at', new Date(lastCheck).toISOString())
+          .order('created_at', { ascending: true });
+
+        if (!error && data && data.length > 0) {
+          console.log('Found new meeting summaries:', data);
+          
+          // Send notification for each new meeting
+          for (const newMeeting of data) {
+            const notificationText = `📋 New meeting summary added: "${newMeeting.meeting_name}" (${new Date(newMeeting.meeting_date).toLocaleDateString()})`;
+            
+            await supabase
+              .from('project_chat_messages')
+              .insert([{
+                project_id: projectId,
+                sender_type: 'system',
+                sender_id: null,
+                message: notificationText,
+                source: 'meeting_summary',
+                related_id: newMeeting.id,
+              }]);
+            
+            console.log('Notification sent for:', newMeeting.meeting_name);
+          }
+          
+          // Reload messages
+          const msgs = await storage.getMessages(projectId);
+          setMessages(msgs);
+          
+          // Update meeting summaries if modal is open
+          if (meetOpen) {
+            const { data: allMeetings } = await supabase
+              .from('meeting_summaries')
+              .select('*')
+              .eq('project_id', projectId)
+              .order('meeting_date', { ascending: false });
+            
+            if (allMeetings) {
+              setMeetingSummaries(allMeetings);
+            }
+          }
+        }
+        
+        lastCheck = Date.now();
+      } catch (error) {
+        console.error('Error checking for new meetings:', error);
+      }
+    }, 30000); // Check every 30 seconds to reduce load
+
+    return () => {
+      console.log('Cleaning up polling interval');
+      clearInterval(interval);
+    };
+  }, [projectId, project, meetOpen]);
+
+  // Load chat messages on mount
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!projectId) return;
+      setIsLoadingChat(true);
+      try {
+        const msgs = await storage.getMessages(projectId);
+        setMessages(msgs);
+      } catch (error) {
+        console.error('Error loading chat messages:', error);
+      } finally {
+        setIsLoadingChat(false);
+      }
+    };
+    
+    loadMessages();
+  }, [projectId]);
 
   // Area management
   const [addingArea, setAddingArea] = useState(false);
@@ -84,6 +257,30 @@ export default function ProjectDetailPage() {
   const [linked, setLinked] = useState<any[]>([]);
   const [screenshots, setScreenshots] = useState<any[]>([]);
   const [renders, setRenders] = useState<any[]>([]);
+  const [projectFiles, setProjectFiles] = useState<any[]>([]);
+  const [userFiles, setUserFiles] = useState<any[]>([]);
+  const [finalFiles, setFinalFiles] = useState<any[]>([]);
+
+  // Helper function to convert Google Drive URLs to proxied URLs
+  const getDirectImageUrl = (url: string) => {
+    if (!url) {
+      console.warn('getDirectImageUrl: URL is null or undefined');
+      return null;
+    }
+    
+    console.log('getDirectImageUrl input:', url);
+    
+    // Handle Google Drive URLs by proxying them through our API
+    if (url.includes('drive.google.com')) {
+      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`;
+      console.log('getDirectImageUrl: Using proxy:', proxyUrl);
+      return proxyUrl;
+    }
+    
+    // Return original URL for non-Google Drive URLs
+    console.log('getDirectImageUrl: Returning original URL:', url);
+    return url;
+  };
 
   // Define functions that will be used in useEffect
   async function loadChatMessages() {
@@ -91,20 +288,7 @@ export default function ProjectDetailPage() {
     try {
       setIsLoadingChat(true);
       const msgs = await storage.getMessages(projectId);
-      if (msgs.length === 0) {
-        // Seed welcome message
-        const welcomeMsg: StorageChatMessage = {
-          id: `m_${projectId}_welcome`,
-          projectId,
-          sender: "agent",
-          text: `Hi, I'm your project assistant! 👋 Feel free to share your requirements, upload files, or ask me anything about your project.`,
-          ts: Date.now(),
-        };
-        await storage.saveMessage(welcomeMsg);
-        setMessages([welcomeMsg]);
-      } else {
-        setMessages(msgs);
-      }
+      setMessages(msgs); // Welcome message is automatically added by storage.getMessages()
     } catch (err) {
       setChatError('Failed to load messages');
       console.error(err);
@@ -135,9 +319,9 @@ export default function ProjectDetailPage() {
         await supabase
           .from(tableName)
           .update({ 
-            approval_status: 'approved',
-            change_notes: null,
-            updated_at: new Date().toISOString()
+            status: 'approved',
+            notes: null,
+            decided_at: new Date().toISOString()
           })
           .eq('id', item.id);
       }
@@ -175,9 +359,9 @@ export default function ProjectDetailPage() {
         await supabase
           .from(tableName)
           .update({ 
-            approval_status: 'change_requested',
-            change_notes: changeNotes.trim(),
-            updated_at: new Date().toISOString()
+            status: 'change_requested',
+            notes: changeNotes.trim(),
+            decided_at: new Date().toISOString()
           })
           .eq('id', item.id);
       }
@@ -200,7 +384,72 @@ export default function ProjectDetailPage() {
     setChangeNotes("");
   };
 
-  // ...existing code...
+  // Get status buttons for renders/screenshots
+  const getStatusButtons = (area: string, type: 'renders' | 'screenshots', index: number) => {
+    // Check Supabase data first for real projects
+    if (!isDemoProject) {
+      const items = type === 'renders' ? rendersForArea(area) : screenshotsFor(area);
+      const item = items[index];
+      if (item?.status) {
+        if (item.status === 'approved') {
+          return (
+            <div className="bg-green-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
+              ✓ Approved
+            </div>
+          );
+        }
+        if (item.status === 'change_requested') {
+          return (
+            <div className="bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
+              🔄 Change Requested
+            </div>
+          );
+        }
+      }
+    }
+    
+    // Fallback to local state for demo projects
+    const status = approvalStatus[area]?.[type]?.[index];
+    
+    if (status === 'approved') {
+      return (
+        <div className="bg-green-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
+          ✓ Approved
+        </div>
+      );
+    }
+    
+    if (status === 'requested-change') {
+      return (
+        <div className="bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
+          🔄 Change Requested
+        </div>
+      );
+    }
+    
+    return (
+      <div className="flex gap-2">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleApprove(area, type, index);
+          }}
+          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium transition-colors shadow-lg"
+        >
+          ✓ Approve
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleRequestChange(area, type, index);
+          }}
+          className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full text-sm font-medium transition-colors shadow-lg"
+        >
+          🔄 Request Change
+        </button>
+      </div>
+    );
+  };
 
   // Listen for changes to project products in localStorage
   useEffect(() => {
@@ -245,36 +494,77 @@ export default function ProjectDetailPage() {
     }
   }, [chatOpen, projectId]);
 
+  // Load project files from project_folder_url
+  useEffect(() => {
+    if (!project) return;
+    
+    console.log('Loading project files. Project:', project.id);
+    console.log('project_folder_url:', (project as any).project_folder_url);
+    
+    // For demo projects, use mock files
+    if (isDemoProject) {
+      setProjectFiles([
+        { id: 'file1', projectId: project.id, type: 'pdf', url: 'https://example.com/floor-plan.pdf', name: 'Floor Plan.pdf' },
+        { id: 'file2', projectId: project.id, type: 'dwg', url: 'https://example.com/technical-drawing.dwg', name: 'Technical Drawing.dwg' }
+      ]);
+      console.log('Using mock files for demo project');
+      return;
+    }
+    
+    // For real projects, parse project_folder_url
+    const folderUrl = (project as any).project_folder_url;
+    if (folderUrl && typeof folderUrl === 'string') {
+      console.log('Parsing folder URL:', folderUrl);
+      const urls = folderUrl.split(',').map(url => url.trim()).filter(url => url.length > 0);
+      const files = urls.map((url, index) => {
+        const fileName = url.split('/').pop() || 'File';
+        const extension = fileName.split('.').pop()?.toLowerCase() || 'file';
+        return {
+          id: `file_${index}`,
+          projectId: project.id,
+          type: extension,
+          url: url,
+          name: fileName
+        };
+      });
+      console.log('Parsed files:', files);
+      setProjectFiles(files);
+    } else {
+      console.log('No project_folder_url found or invalid format');
+      setProjectFiles([]);
+    }
+  }, [project, isDemoProject]);
+
   // Load screenshots and renders from Supabase
   useEffect(() => {
     if (!project || project.id.startsWith('demo_')) return;
     
     async function loadScreenshotsAndRenders() {
       try {
-        // Load screenshots
-        const { data: screenshotsData, error: screenshotsError } = await supabase
-          .from('project_screenshots')
-          .select('*')
-          .eq('project_id', project.id)
-          .order('created_at', { ascending: true });
+        // Load both screenshots and renders in parallel for faster loading
+        const [screenshotsResult, rendersResult] = await Promise.all([
+          supabase
+            .from('project_screenshots')
+            .select('*')
+            .eq('project_id', project.id)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('project_renders')
+            .select('*')
+            .eq('project_id', project.id)
+            .order('created_at', { ascending: true })
+        ]);
         
-        if (screenshotsError) {
-          console.error('Error loading screenshots:', screenshotsError);
+        if (screenshotsResult.error) {
+          console.error('Error loading screenshots:', screenshotsResult.error);
         } else {
-          setScreenshots(screenshotsData || []);
+          setScreenshots(screenshotsResult.data || []);
         }
-
-        // Load renders
-        const { data: rendersData, error: rendersError } = await supabase
-          .from('project_renders')
-          .select('*')
-          .eq('project_id', project.id)
-          .order('created_at', { ascending: true });
         
-        if (rendersError) {
-          console.error('Error loading renders:', rendersError);
+        if (rendersResult.error) {
+          console.error('Error loading renders:', rendersResult.error);
         } else {
-          setRenders(rendersData || []);
+          setRenders(rendersResult.data || []);
         }
       } catch (err) {
         console.error('Error loading screenshots/renders:', err);
@@ -284,11 +574,64 @@ export default function ProjectDetailPage() {
     loadScreenshotsAndRenders();
   }, [project]);
 
+  // Load user uploaded files from Supabase
+  useEffect(() => {
+    if (!project || isDemoProject) return;
+    
+    async function loadUserFiles() {
+      try {
+        const { data, error } = await supabase
+          .from('project_user_files')
+          .select('*')
+          .eq('project_id', project.id)
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('Error loading user files:', error);
+          setUserFiles([]);
+        } else {
+          setUserFiles(data || []);
+        }
+      } catch (err) {
+        console.error('Error loading user files:', err);
+        setUserFiles([]);
+      }
+    }
+
+    loadUserFiles();
+  }, [project, isDemoProject]);
+
+  // Load final files from Supabase
+  useEffect(() => {
+    if (!project || isDemoProject) return;
+    
+    async function loadFinalFiles() {
+      try {
+        const { data, error } = await supabase
+          .from('project_final_files')
+          .select('*')
+          .eq('project_id', project.id)
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('Error loading final files:', error);
+          setFinalFiles([]);
+        } else {
+          setFinalFiles(data || []);
+        }
+      } catch (err) {
+        console.error('Error loading final files:', err);
+        setFinalFiles([]);
+      }
+    }
+
+    loadFinalFiles();
+  }, [project, isDemoProject]);
+
   // Load linked products
   useEffect(() => {
     if (!project) return; // Guard against null project
     
-    const isDemoProject = project.id.startsWith('demo_');
     if (isDemoProject) {
       setLinked((demoProjectProducts ?? []).filter((pp) => pp.projectId === project.id));
     } else {
@@ -309,21 +652,22 @@ export default function ProjectDetailPage() {
         const localData = JSON.parse(localStorage.getItem(localKey) || "[]");
         const localProjectProducts = localData.filter((pp: any) => pp.projectId === project.id);
         
-        // Fetch product details for localStorage entries
-        const localProductsWithDetails = await Promise.all(
-          localProjectProducts.map(async (pp: any) => {
-            const { data: productData } = await supabase
-              .from('products')
-              .select('*')
-              .eq('id', pp.productId)
-              .single();
-            
-            return {
-              ...pp,
-              product: productData,
-            };
-          })
-        );
+        // Batch fetch ALL product details in ONE query instead of sequential calls
+        let localProductsWithDetails: any[] = [];
+        if (localProjectProducts.length > 0) {
+          const productIds = localProjectProducts.map((pp: any) => pp.productId);
+          const { data: productsData } = await supabase
+            .from('products')
+            .select('*')
+            .in('id', productIds);
+          
+          // Map products back to project products
+          const productsMap = new Map((productsData || []).map(p => [p.id, p]));
+          localProductsWithDetails = localProjectProducts.map((pp: any) => ({
+            ...pp,
+            product: productsMap.get(pp.productId),
+          }));
+        }
         
         // Combine both sources (Supabase + localStorage)
         const combined = [
@@ -335,7 +679,7 @@ export default function ProjectDetailPage() {
       }
       fetchLinked();
     }
-  }, [project, productRefreshKey]);
+  }, [project, productRefreshKey, isDemoProject]);
 
   // Keyboard navigation for lightbox
   useEffect(() => {
@@ -358,12 +702,15 @@ export default function ProjectDetailPage() {
   }, [lightboxOpen, lightboxImages.length]);
 
   // Early return AFTER all hooks to comply with Rules of Hooks
-  if (!project) return <div className="container py-8">Project not found</div>;
+  // Don't show "not found" if we're in the process of deleting (causes hook count mismatch)
+  if (!project) {
+    if (isDeleting) {
+      return <div className="container py-8">Deleting project...</div>;
+    }
+    return <div className="container py-8">Project not found</div>;
+  }
 
-  const projectCode = `#DAC-${project.id.slice(0, 6).toUpperCase()}`;
-  
-  // Check if this is a demo project (starts with "demo_") or a real user project
-  const isDemoProject = project.id.startsWith('demo_');
+  const projectCode = (project as any).project_code || `#DAC-${project.id.slice(0, 6).toUpperCase()}`;
 
   // Mock chat messages - only for demo projects
   const mockMessages = isDemoProject ? [
@@ -399,118 +746,62 @@ export default function ProjectDetailPage() {
     }
   ] : [];
 
-  const allRendersForProject = isDemoProject 
-    ? (demoRenders ?? []).filter((r) => r.projectId === project.id)
-    : renders;
+  const allRendersForProject = useMemo(() => {
+    return isDemoProject 
+      ? (demoRenders ?? []).filter((r) => r.projectId === project.id)
+      : renders;
+  }, [isDemoProject, demoRenders, project.id, renders]);
 
   // Derive areas: use project's areas (user-provided) or empty array for real users
-  const derivedFromLinks = Array.from(new Set(linked.map((l) => l.area))).filter(Boolean) as string[];
-  const derivedFromRenders = Array.from(new Set(allRendersForProject.map((r) => r.area).filter(Boolean) as string[]));
-  const derivedFromScreenshots = Array.from(new Set(screenshots.map((s) => s.area).filter(Boolean) as string[]));
-  const areas = (project.areas && project.areas.length)
-    ? project.areas
-    : project.area
-      ? [project.area]
-      : (isDemoProject ? (derivedFromLinks.length ? derivedFromLinks : (derivedFromRenders.length ? derivedFromRenders : [])) : (derivedFromScreenshots.length ? derivedFromScreenshots : []));
+  const areas = useMemo(() => {
+    const derivedFromLinks = Array.from(new Set(linked.map((l) => l.area))).filter(Boolean) as string[];
+    const derivedFromRenders = Array.from(new Set(allRendersForProject.map((r) => r.area).filter(Boolean) as string[]));
+    const derivedFromScreenshots = Array.from(new Set(screenshots.map((s) => s.area).filter(Boolean) as string[]));
+    
+    return (project.areas && project.areas.length)
+      ? project.areas
+      : project.area
+        ? [project.area]
+        : (isDemoProject ? (derivedFromLinks.length ? derivedFromLinks : (derivedFromRenders.length ? derivedFromRenders : [])) : (derivedFromScreenshots.length ? derivedFromScreenshots : []));
+  }, [project.areas, project.area, isDemoProject, linked, allRendersForProject, screenshots]);
 
   // Screenshots from Supabase for real projects, mock for demo
-  // ...existing code...
-
-  // Renders for area
-  const rendersForArea = (area: string) => {
-    const filtered = allRendersForProject.filter((r) => r.area === area);
-    // Map database field to UI field for non-demo projects
-    if (!isDemoProject) {
-      return filtered.map((r) => ({
-        ...r,
-        imageUrl: r.image_url,
-      }));
-    }
-    return filtered;
-  };
-
-  // Get status buttons for renders/screenshots
-  const getStatusButtons = (area: string, type: 'renders' | 'screenshots', index: number) => {
-    // Check Supabase data first for real projects
-    if (!isDemoProject) {
-      const items = type === 'renders' ? rendersForArea(area) : screenshotsFor(area);
-      const item = items[index];
-      if (item?.approval_status) {
-        if (item.approval_status === 'approved') {
-          return (
-            <div className="bg-green-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
-              ✓ Approved
-            </div>
-          );
-        }
-        if (item.approval_status === 'change_requested') {
-          return (
-            <div className="bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
-              🔄 Change Requested
-            </div>
-          );
-        }
-      }
-    }
-    // Fallback to local state for demo projects
-    const status = approvalStatus[area]?.[type]?.[index];
-    if (status === 'approved') {
-      return (
-        <div className="bg-green-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
-          ✓ Approved
-        </div>
-      );
-    }
-    if (status === 'requested-change') {
-      return (
-        <div className="bg-orange-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg">
-          🔄 Change Requested
-        </div>
-      );
-    }
-    return (
-      <div className="flex gap-2">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleApprove(area, type, index);
-          }}
-          className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-full text-sm font-medium transition-colors shadow-lg"
-        >
-          ✓ Approve
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleRequestChange(area, type, index);
-          }}
-          className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full text-sm font-medium transition-colors shadow-lg"
-        >
-          🔄 Request Change
-        </button>
-      </div>
-    );
-  };
-
-  // Screenshots from Supabase for real projects, mock for demo
-  const screenshotsFor = (area: string) => {
+  const screenshotsFor = useCallback((area: string) => {
     if (isDemoProject) {
       return [1, 2].map((n) => ({
         id: `${area}-${n}`,
         imageUrl: `https://picsum.photos/seed/${encodeURIComponent(area + n)}/1200/800`,
       }));
     }
-    return screenshots
+    const result = screenshots
       .filter((s) => s.area === area)
-      .map((s) => ({
-        ...s,
-        imageUrl: s.image_url, // Map database field to UI field
-      }));
-  };
+      .map((s) => {
+        const directUrl = getDirectImageUrl(s.image_url) || s.image_url;
+        return {
+          ...s,
+          imageUrl: directUrl,
+        };
+      });
+    return result;
+  }, [isDemoProject, screenshots]);
 
-  // ...existing code...
+  // Renders for area
+  const rendersForArea = useCallback((area: string) => {
+    const filtered = allRendersForProject.filter((r) => r.area === area);
+    // Map database field to UI field for non-demo projects
+    if (!isDemoProject) {
+      return filtered.map((r) => {
+        const directUrl = getDirectImageUrl(r.render_url) || r.render_url;
+        return {
+          ...r,
+          imageUrl: directUrl,
+        };
+      });
+    }
+    return filtered;
+  }, [allRendersForProject, isDemoProject]);
 
-  const productsFor = (area: string) => {
+  const productsFor = useCallback((area: string) => {
     if (isDemoProject) {
       return linked
         .filter((l) => l.area === area)
@@ -532,10 +823,10 @@ export default function ProjectDetailPage() {
           price: l.product.price || l.product.selling_price || 0,
         }));
     }
-  };
+  }, [isDemoProject, linked, demoProductsAll]);
 
   // Get unique products with their counts for display
-  const getUniqueProductsWithCount = (area: string) => {
+  const getUniqueProductsWithCount = useCallback((area: string) => {
     const products = productsFor(area);
     const productMap = new Map<string, { product: typeof products[0], count: number }>();
     
@@ -548,17 +839,17 @@ export default function ProjectDetailPage() {
     });
     
     return Array.from(productMap.values());
-  };
+  }, [productsFor]);
 
-  async function sendChat(text?: string, attachments?: UploadedFile[], meetingInfo?: StorageChatMessage['meetingInfo']) {
+  async function sendChat(text?: string, attachments?: UploadedFile[], meetingInfo?: StorageChatMessage['meetingInfo'], isSystemMessage?: boolean) {
     const messageText = text || chatText;
-    if (!messageText.trim() && !attachments?.length) return;
+    if (!messageText.trim() && !attachments?.length && !meetingInfo) return;
     
     try {
       const msg: StorageChatMessage = {
         id: `m_${Date.now()}`,
         projectId,
-        sender: "designer",
+        sender: isSystemMessage ? "system" : "client", // System for notifications, client for regular messages
         text: messageText.trim(),
         ts: Date.now(),
         ...(attachments && { attachments }),
@@ -566,7 +857,9 @@ export default function ProjectDetailPage() {
       };
       await storage.saveMessage(msg);
       setMessages(prev => [...prev, msg]);
-      setChatText("");
+      if (!isSystemMessage) {
+        setChatText("");
+      }
     } catch (err) {
       setChatError('Failed to send message');
       console.error(err);
@@ -583,8 +876,9 @@ export default function ProjectDetailPage() {
           projectId
         }))
       );
+      // Send attachments without the "Shared X files/images" text
       await sendChat(
-        `Shared ${uploaded.length} ${type}${uploaded.length > 1 ? 's' : ''}`,
+        "",
         uploaded
       );
     } catch (err) {
@@ -600,33 +894,35 @@ export default function ProjectDetailPage() {
   }
 
   async function scheduleChatMeeting() {
+    if (!meetingDate || !meetingTime) {
+      setChatError('Please select both date and time');
+      return;
+    }
+
     try {
       setIsLoadingChat(true);
-      const date = new Date();
-      date.setMinutes(Math.ceil(date.getMinutes() / 30) * 30);
 
-      const meeting = await meetingService.createMeeting({
-        projectId,
-        date: date.toISOString().split('T')[0],
-        time: date.toTimeString().split(':').slice(0, 2).join(':'),
+      const meetingInfo = {
+        id: `meet_${Date.now()}`,
+        date: meetingDate,
+        time: meetingTime,
         duration: 30,
         title: `Design Consultation - ${project.name}`,
-      });
-
-      // Create calendar event
-      const calendarUrl = meetingService.getCalendarEvent(meeting);
+        link: '#', // Your team will handle the actual meeting link
+        status: 'scheduled' as const
+      };
 
       await sendChat(
-        "I've scheduled a meeting.",
+        "Meeting scheduled",
         undefined,
-        {
-          ...meeting,
-          status: 'scheduled'
-        }
+        meetingInfo
       );
 
-      // Open calendar event in new tab
-      window.open(calendarUrl, '_blank');
+      // Reset form and close modal
+      setMeetingDate("");
+      setMeetingTime("");
+      setScheduleMeetingOpen(false);
+      setChatError(null);
     } catch (err) {
       setChatError('Failed to schedule meeting');
       console.error(err);
@@ -635,7 +931,7 @@ export default function ProjectDetailPage() {
     }
   }
 
-  const files = mockFiles;
+  const files = projectFiles;
 
   // Add new area to project
   const { updateProject } = useProjects();
@@ -692,8 +988,63 @@ export default function ProjectDetailPage() {
     setAddingArea(false);
   };
 
+  const handleMeetingApproval = async (meetingId: string, status: 'approved' | 'changes_needed', feedback?: string) => {
+    try {
+      // Get meeting details before updating
+      const meeting = meetingSummaries.find(m => m.id === meetingId);
+      if (!meeting) return;
+
+      const { error } = await supabase
+        .from('meeting_summaries')
+        .update({ 
+          status,
+          client_feedback: feedback || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', meetingId);
+
+      if (error) throw error;
+
+      // Update local state
+      setMeetingSummaries(prev =>
+        prev.map(m =>
+          m.id === meetingId
+            ? { ...m, status, client_feedback: feedback || null }
+            : m
+        )
+      );
+
+      // Send chat notification
+      const notificationText = status === 'approved' 
+        ? `✅ Meeting Summary Approved: "${meeting.meeting_name}"`
+        : `📝 Changes Requested for Meeting Summary: "${meeting.meeting_name}"${feedback ? `\n\nFeedback: ${feedback}` : ''}`;
+      
+      // Client actions (approve/changes) should show as client messages (right side)
+      await sendChat(notificationText, undefined, undefined, false);
+
+      // Close feedback modal if open
+      if (feedbackModal?.open) {
+        setFeedbackModal({ open: false, meetingId: '' });
+        setFeedbackText("");
+      }
+    } catch (error) {
+      console.error('Error updating meeting status:', error);
+      alert('Failed to update meeting status. Please try again.');
+    }
+  };
+
   const handleDeleteProject = async () => {
+    if (!project) {
+      alert('Project not found.');
+      setShowDeleteConfirm(false);
+      return;
+    }
+    
     setIsDeleting(true);
+    
+    // Close modal immediately
+    setShowDeleteConfirm(false);
+    
     try {
       // Delete from Supabase if it's a real project
       if (!isDemoProject) {
@@ -704,22 +1055,25 @@ export default function ProjectDetailPage() {
         
         if (error) {
           console.error('Error deleting project:', error);
-          alert('Failed to delete project. Please try again.');
           setIsDeleting(false);
+          alert('Failed to delete project. Please try again.');
           return;
         }
       }
       
-      // Remove from context (this will update the dashboard immediately)
-      deleteProjectFromContext(project.id);
+      // Navigate to dashboard first, then remove from context
+      // This prevents the component from re-rendering with null project
+      router.push('/');
       
-      // Navigate back to dashboard
-      router.push('/projects');
+      // Remove from context after navigation starts (async operation)
+      setTimeout(() => {
+        deleteProjectFromContext(project.id);
+      }, 100);
+      
     } catch (error) {
       console.error('Error deleting project:', error);
-      alert('Failed to delete project. Please try again.');
       setIsDeleting(false);
-      setShowDeleteConfirm(false);
+      alert('Failed to delete project. Please try again.');
     }
   };
 
@@ -738,17 +1092,46 @@ export default function ProjectDetailPage() {
         }))
       );
       
-      // Refresh files list or show success message
-      alert(`Successfully uploaded ${uploaded.length} file(s)`);
+      // Save file info to project_user_files table
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData.user) {
+        const fileRecords = uploaded.map(f => ({
+          project_id: projectId,
+          user_id: userData.user.id,
+          file_url: f.url,
+          file_name: f.name,
+          file_type: f.name.split('.').pop()?.toLowerCase() || 'file',
+          file_size: f.size
+        }));
+        
+        const { error: insertError } = await supabase
+          .from('project_user_files')
+          .insert(fileRecords);
+        
+        if (insertError) {
+          console.error('Error saving file records:', insertError);
+        } else {
+          // Reload user files
+          const { data: userFilesData } = await supabase
+            .from('project_user_files')
+            .select('*')
+            .eq('project_id', projectId)
+            .order('created_at', { ascending: false });
+          
+          setUserFiles(userFilesData || []);
+        }
+      }
       
-      // You can add the files to a state or refetch them here
+      alert(`Successfully uploaded ${uploaded.length} file(s)`);
     } catch (err) {
+      console.error('Upload error:', err);
       if (err instanceof UploadError) {
         setUploadError(err.message);
+      } else if (err instanceof Error) {
+        setUploadError(err.message || 'Failed to upload files');
       } else {
-        setUploadError('Failed to upload files');
+        setUploadError('Failed to upload files. Please try again.');
       }
-      console.error(err);
     } finally {
       setUploadingFiles(false);
     }
@@ -802,7 +1185,7 @@ export default function ProjectDetailPage() {
         <div className="mb-3">
           <Button
             variant="outline"
-            onClick={() => history.back()}
+            onClick={() => router.push('/')}
             className="px-3 py-1.5 text-sm text-black/70 hover:bg-gray-100 border-black/20 inline-flex items-center gap-1.5"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -850,34 +1233,26 @@ export default function ProjectDetailPage() {
               <Button
                 variant="outline"
                 onClick={() => setChatOpen(true)}
-                className="flex items-center justify-center w-10 h-10 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
+                className="flex items-center justify-center w-14 h-14 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
                 title="Chat"
               >
-                <MessageCircle className="w-5 h-5" />
+                <MessageCircle className="w-6 h-6" />
               </Button>
               <Button
                 variant="outline"
                 onClick={() => setMeetOpen(true)}
-                className="flex items-center justify-center w-10 h-10 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
+                className="flex items-center justify-center w-14 h-14 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
                 title="Meeting Summary"
               >
-                <ClipboardList className="w-5 h-5" />
+                <ClipboardList className="w-6 h-6" />
               </Button>
               <Button
                 variant="outline"
                 onClick={() => setFilesOpen(true)}
-                className="flex items-center justify-center w-10 h-10 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
-                title="Files"
+                className="flex items-center justify-center w-14 h-14 p-0 text-[#d96857] hover:bg-[#d96857] hover:text-white border-[#d96857]/30 transition-all"
+                title="Project Folder"
               >
-                <FolderOpen className="w-5 h-5" />
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setShowDeleteConfirm(true)}
-                className="flex items-center justify-center w-10 h-10 p-0 text-red-600 hover:bg-red-600 hover:text-white border-red-600/30 transition-all"
-                title="Delete Project"
-              >
-                <Trash2 className="w-5 h-5" />
+                <FolderOpen className="w-6 h-6" />
               </Button>
             </div>
           </div>
@@ -998,29 +1373,48 @@ export default function ProjectDetailPage() {
         )}
 
         {/* Quote by Team Section */}
-        <div className="relative bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 border-2 border-[#d96857]/20 rounded-2xl p-6 shadow-lg shadow-black/5 mt-6 hover:shadow-xl transition-all">
-          <div className="flex items-center justify-between">
+        <div className="grid sm:grid-cols-2 gap-4 mt-6">
+          {/* Quotes and Bills Box */}
+          <button
+            onClick={() => router.push(`/projects/${project.id}/quotes`)}
+            className="relative bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 border-2 border-[#d96857]/20 rounded-2xl p-6 shadow-lg shadow-black/5 hover:shadow-xl transition-all cursor-pointer text-left w-full"
+          >
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-xl bg-[#d96857] flex items-center justify-center">
+              <div className="w-14 h-14 rounded-xl bg-[#d96857] flex items-center justify-center flex-shrink-0">
                 <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">Quote by Team</h3>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">Quotes and Bills</h3>
                 <p className="text-sm text-[#2e2e2e]/70">View detailed quotations and documents from our team</p>
               </div>
-            </div>
-            <Button
-              onClick={() => router.push(`/projects/${project.id}/quotes`)}
-              className="bg-[#d96857] text-white hover:bg-[#c85745] px-6 py-2.5 flex items-center gap-2 shadow-md"
-            >
-              View Quote
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 text-[#d96857] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-            </Button>
-          </div>
+            </div>
+          </button>
+
+          {/* Final Files Box */}
+          <button
+            onClick={() => setFinalFilesOpen(true)}
+            className="relative bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 border-2 border-[#d96857]/20 rounded-2xl p-6 shadow-lg shadow-black/5 hover:shadow-xl transition-all cursor-pointer text-left w-full"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-xl bg-[#d96857] flex items-center justify-center flex-shrink-0">
+                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">Final Files</h3>
+                <p className="text-sm text-[#2e2e2e]/70">Access all final drawings and specifications</p>
+              </div>
+              <svg className="w-6 h-6 text-[#d96857] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+          </button>
         </div>
 
         <div className="h-px bg-black/10 my-6 rounded-full" />
@@ -1060,7 +1454,7 @@ export default function ProjectDetailPage() {
         ) : (
           <div className="grid sm:grid-cols-2 gap-5">
             {areas.map((area, idx) => {
-            const areaRenders = rendersForArea(area).slice(0, 2);
+            const areaRenders = rendersForArea(area);
             const areaScreens = screenshotsFor(area);
             const areaProducts = productsFor(area);
             const uniqueProductsWithCount = getUniqueProductsWithCount(area);
@@ -1109,7 +1503,14 @@ export default function ProjectDetailPage() {
                             src={areaRenders[activeSlides[area]?.renders || 0]?.imageUrl}
                             className="w-full h-[400px] object-cover cursor-pointer"
                             alt="render"
+                            loading="lazy"
                             onClick={() => openLightbox(area, 'renders', activeSlides[area]?.renders || 0)}
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              console.error('❌ Render image failed to load:', target.src);
+                              console.error('Image error event:', e);
+                              target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgdmlld0JveD0iMCAwIDQwMCA0MDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik0yMDAgMTAwQzE2MS4zIDEwMCAxMzAgMTMxLjMgMTMwIDE3MFYyMzBDMTMwIDI2OC43IDE2MS4zIDMwMCAyMDAgMzAwQzIzOC43IDMwMCAyNzAgMjY4LjcgMjcwIDIzMFYxNzBDMjcwIDEzMS4zIDIzOC43IDEwMCAyMDAgMTAwWk0yMDAgMjcwQzE3Ny45IDI3MCAyNTAgMjQ3LjEgMTUwIDIzMFYxNzBDMTUwIDE0Mi4zIDE3Mi4zIDEyMCAyMDAgMTIwQzIyNy43IDEyMCAyNTAgMTQyLjMgMjUwIDE3MFYyMzBDMjUwIDI0Ny4xIDIyNy43IDI3MCAyMDAgMjcwWiIgZmlsbD0iIzk5OTk5OSIvPgo8cGF0aCBkPSJNMTcwIDE3MEMxNzAgMTUzLjMgMTgzLjMgMTQwIDIwMCAxNDBDMjE2LjcgMTQwIDIzMCAxNTMuMyAyMzAgMTcwQzIzMCAxODYuNyAyMTYuNyAyMDAgMjAwIDIwMEMxODMuMyAyMDAgMTcwIDE4Ni43IDE3MCAxNzBaIiBmaWxsPSIjOTk5OTk5Ii8+Cjx0ZXh0IHg9IjIwMCIgeT0iMzMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNjY2NjY2IiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiPkltYWdlIG5vdCBhdmFpbGFibGU8L3RleHQ+Cjwvc3ZnPg==';
+                            }}
                           />
                           {areaRenders.length > 1 && (
                             <>
@@ -1169,7 +1570,14 @@ export default function ProjectDetailPage() {
                             src={areaScreens[activeSlides[area]?.screenshots || 0]?.imageUrl}
                             className="w-full h-[400px] object-cover cursor-pointer"
                             alt="screenshot"
+                            loading="lazy"
                             onClick={() => openLightbox(area, 'screenshots', activeSlides[area]?.screenshots || 0)}
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              console.error('❌ Screenshot image failed to load:', target.src);
+                              console.error('Image error event:', e);
+                              target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgdmlld0JveD0iMCAwIDQwMCA0MDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik0yMDAgMTAwQzE2MS4zIDEwMCAxMzAgMTMxLjMgMTMwIDE3MFYyMzBDMTMwIDI2OC43IDE2MS4zIDMwMCAyMDAgMzAwQzIzOC43IDMwMCAyNzAgMjY4LjcgMjcwIDIzMFYxNzBDMjcwIDEzMS4zIDIzOC43IDEwMCAyMDAgMTAwWk0yMDAgMjcwQzE3Ny45IDI3MCAyNTAgMjQ3LjEgMTUwIDIzMFYxNzBDMTUwIDE0Mi4zIDE3Mi4zIDEyMCAyMDAgMTIwQzIyNy43IDEyMCAyNTAgMTQyLjMgMjUwIDE3MFYyMzBDMjUwIDI0Ny4xIDIyNy43IDI3MCAyMDAgMjcwWiIgZmlsbD0iIzk5OTk5OSIvPgo8cGF0aCBkPSJNMTcwIDE3MEMxNzAgMTUzLjMgMTgzLjMgMTQwIDIwMCAxNDBDMjE2LjcgMTQwIDIzMCAxNTMuMyAyMzAgMTcwQzIzMCAxODYuNyAyMTYuNyAyMDAgMjAwIDIwMEMxODMuMyAyMDAgMTcwIDE4Ni43IDE3MCAxNzBaIiBmaWxsPSIjOTk5OTk5Ii8+Cjx0ZXh0IHg9IjIwMCIgeT0iMzMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNjY2NjY2IiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiPkltYWdlIG5vdCBhdmFpbGFibGU8L3RleHQ+Cjwvc3ZnPg==';
+                            }}
                           />
                           {areaScreens.length > 1 && (
                             <>
@@ -1298,6 +1706,18 @@ export default function ProjectDetailPage() {
         )}
       </div>
 
+      {/* Delete Project Section - Bottom of Page */}
+      <div className="mt-8 pt-6 border-t border-black/10 flex justify-center">
+        <Button
+          variant="outline"
+          onClick={() => setShowDeleteConfirm(true)}
+          className="px-6 py-2.5 text-red-600 border-red-600/30 hover:bg-red-600 hover:text-white transition-all flex items-center gap-2 rounded-full"
+        >
+          <Trash2 className="w-4 h-4" />
+          Delete Project
+        </Button>
+      </div>
+
       {openArea && (
         <AreaModal
           open={true}
@@ -1316,7 +1736,7 @@ export default function ProjectDetailPage() {
         maxWidth="max-w-4xl"
       >
         {chatError && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600 flex items-center justify-between">
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 flex items-center justify-between">
             <span>{chatError}</span>
             <Button
               className="p-1 hover:bg-red-100 rounded-full"
@@ -1327,190 +1747,290 @@ export default function ProjectDetailPage() {
           </div>
         )}
         
-        <div className="h-[60vh] overflow-y-auto bg-[#f9f9f8] p-4 rounded-xl mb-4">
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`mb-3 flex ${
-                m.sender === "designer" ? "justify-end" : "justify-start"
-              }`}
-            >
+        {/* Messages Area */}
+        <div className="h-[65vh] overflow-y-auto bg-gradient-to-b from-[#f9f9f8] to-white p-6 rounded-2xl mb-4 border border-zinc-100">
+          {messages.map((m) => {
+            const hasAttachments = m.attachments && m.attachments.length > 0;
+            const hasMeeting = m.meetingInfo;
+            const isClient = m.sender === "client";
+            const isSystem = m.sender === "system";
+            
+            // System messages show on left like designer messages
+            const showOnRight = isClient;
+            
+            // Use neutral colors for messages with attachments/meetings
+            const useNeutral = isClient && (hasAttachments || hasMeeting);
+            
+            return (
               <div
-                className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
-                  m.sender === "designer"
-                    ? "bg-[#d96857] text-white"
-                    : "bg-white text-[#2e2e2e] border border-zinc-200"
-                }`}
+                key={m.id}
+                className={`mb-5 flex ${showOnRight ? "justify-end" : "justify-start"}`}
               >
-                <div className="whitespace-pre-wrap">{m.text}</div>
-                
-                {/* Meeting Info */}
-                {m.meetingInfo && (
-                  <div className={`mt-2 p-3 rounded-lg ${
-                    m.sender === "designer" ? "bg-[#c85745]" : "bg-zinc-100"
-                  }`}>
-                    <div className="flex items-center gap-2 text-xs mb-2">
-                      <CalendarDays className="w-4 h-4" />
-                      <span className="font-medium">Meeting Scheduled</span>
+                <div className="max-w-[70%] space-y-2.5">
+                  {/* Text Message */}
+                  {!hasMeeting && m.text && m.text.trim() && (
+                    <div
+                      className={`rounded-2xl px-4 py-3 shadow-sm ${
+                        useNeutral
+                          ? "bg-zinc-100 text-[#2e2e2e] border border-zinc-200"
+                          : isClient
+                          ? "bg-[#d96857] text-white"
+                          : "bg-white text-[#2e2e2e] border border-zinc-200"
+                      }`}
+                    >
+                      <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">{m.text}</div>
                     </div>
-                    <div className="text-xs space-y-1">
-                      <div>Date: {m.meetingInfo.date}</div>
-                      <div>Time: {m.meetingInfo.time}</div>
-                      <div>Duration: {m.meetingInfo.duration} minutes</div>
-                      <a 
-                        href={m.meetingInfo.link} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className={`inline-block mt-2 px-3 py-1 rounded-full text-xs ${
-                          m.sender === "designer" 
-                            ? "bg-white text-[#d96857]" 
-                            : "bg-[#d96857] text-white"
-                        }`}
-                      >
-                        Join Meeting
-                      </a>
-                    </div>
-                  </div>
-                )}
-
-                {/* Attachments */}
-                {m.attachments && m.attachments.length > 0 && (
-                  <div className="mt-2 space-y-2">
-                    {m.attachments.map((att, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`p-2 rounded-lg flex items-center gap-2 ${
-                          m.sender === "designer" ? "bg-[#c85745]" : "bg-zinc-100"
-                        }`}
-                      >
-                        {att.type === 'image' ? (
-                          <ImageIcon className="w-4 h-4" />
-                        ) : (
-                          <Paperclip className="w-4 h-4" />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium truncate">{att.name}</div>
-                          {att.size && (
-                            <div className="text-[10px] opacity-70">
-                              {Math.round(att.size / 1024)}KB
-                            </div>
-                          )}
+                  )}
+                  
+                  {/* Meeting Info */}
+                  {hasMeeting && (
+                    <div className="bg-white text-[#2e2e2e] rounded-2xl p-4 shadow-sm border border-zinc-200">
+                      <div className="flex items-center gap-2.5 mb-3">
+                        <div className="p-2 rounded-lg bg-[#d96857]/10">
+                          <CalendarDays className="w-4 h-4 text-[#d96857]" />
                         </div>
-                        <a 
-                          href={att.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          className={`p-1 rounded-full ${
-                            m.sender === "designer" 
-                              ? "hover:bg-[#c85745]" 
-                              : "hover:bg-zinc-200"
-                          }`}
-                        >
-                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                          </svg>
-                        </a>
+                        <span className="font-semibold text-sm">Meeting Scheduled</span>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div className="text-sm space-y-2 pl-10">
+                        <div className="flex items-start gap-3">
+                          <span className="text-zinc-500 font-medium min-w-[50px]">Date:</span>
+                          <span className="font-semibold text-[#2e2e2e]">{m.meetingInfo.date}</span>
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <span className="text-zinc-500 font-medium min-w-[50px]">Time:</span>
+                          <span className="font-semibold text-[#2e2e2e]">{m.meetingInfo.time}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
-                <div className="mt-1 text-[10px] opacity-70">
-                  {new Date(m.ts).toLocaleString()}
+                  {/* Attachments */}
+                  {hasAttachments && (
+                    <div className="space-y-2">
+                      {m.attachments.map((att, idx) => (
+                        <div 
+                          key={idx} 
+                          className="bg-white rounded-xl p-3 flex items-center gap-3 border border-zinc-200 shadow-sm hover:shadow-md transition-shadow"
+                        >
+                          <div className="p-2 rounded-lg bg-[#d96857]/10">
+                            {att.type === 'image' ? (
+                              <ImageIcon className="w-4 h-4 text-[#d96857]" />
+                            ) : (
+                              <Paperclip className="w-4 h-4 text-[#d96857]" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-[#2e2e2e] truncate">{att.name}</div>
+                            {att.size && (
+                              <div className="text-xs text-zinc-500 mt-0.5">
+                                {Math.round(att.size / 1024)}KB
+                              </div>
+                            )}
+                          </div>
+                          <a 
+                            href={att.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="p-2 rounded-lg hover:bg-zinc-100 transition-colors"
+                          >
+                            <svg className="w-4 h-4 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                            </svg>
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Timestamp */}
+                  <div className={`text-[10px] text-zinc-400 ${showOnRight ? 'text-right' : 'text-left'} px-1`}>
+                    {new Date(m.ts).toLocaleString('en-US', { 
+                      month: 'short', 
+                      day: 'numeric',
+                      hour: '2-digit', 
+                      minute: '2-digit' 
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {(!messages || messages.length === 0) && !isLoadingChat && (
-            <div className="text-sm text-black/60 text-center py-8">No messages yet. Start the conversation!</div>
+            <div className="flex flex-col items-center justify-center h-full py-12">
+              <div className="w-16 h-16 rounded-full bg-[#d96857]/10 flex items-center justify-center mb-4">
+                <MessageCircle className="w-8 h-8 text-[#d96857]" />
+              </div>
+              <h3 className="text-lg font-semibold text-[#2e2e2e] mb-2">No messages yet</h3>
+              <p className="text-sm text-zinc-500">Start the conversation to discuss your project</p>
+            </div>
           )}
         </div>
 
-        {/* Quick Actions */}
-        <div className="flex items-center gap-2 mb-3">
-          <Button
-            className="flex items-center gap-1.5 text-xs bg-zinc-100 hover:bg-zinc-200 text-zinc-700 px-3 py-1.5 rounded-full"
-            onClick={() => {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.multiple = true;
-              input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip';
-              input.onchange = (e) => {
-                const files = (e.target as HTMLInputElement).files;
-                if (files?.length) {
-                  handleChatUpload(files, 'file');
-                }
-              };
-              input.click();
-            }}
-            disabled={isLoadingChat}
-          >
-            <Paperclip className="w-3 h-3" />
-            Add Files
-          </Button>
-          
-          <Button
-            className="flex items-center gap-1.5 text-xs bg-zinc-100 hover:bg-zinc-200 text-zinc-700 px-3 py-1.5 rounded-full"
-            onClick={scheduleChatMeeting}
-            disabled={isLoadingChat}
-          >
-            <CalendarDays className="w-3 h-3" />
-            Schedule Meeting
-          </Button>
-          
-          <Button
-            className="flex items-center gap-1.5 text-xs bg-zinc-100 hover:bg-zinc-200 text-zinc-700 px-3 py-1.5 rounded-full"
-            onClick={() => {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = 'image/*';
-              input.multiple = true;
-              input.onchange = (e) => {
-                const files = (e.target as HTMLInputElement).files;
-                if (files?.length) {
-                  handleChatUpload(files, 'image');
-                }
-              };
-              input.click();
-            }}
-            disabled={isLoadingChat}
-          >
-            <ImageIcon className="w-3 h-3" />
-            Add Images
-          </Button>
-        </div>
-
-        {/* Message Input */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Input
-              placeholder="Type a message…"
-              value={chatText}
-              onChange={(e) => setChatText(e.target.value)}
-              className="w-full rounded-2xl pr-10"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  if (chatText.trim()) {
-                    sendChat();
+        {/* Input Area */}
+        <div className="bg-white rounded-2xl border border-zinc-200 p-4">
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-zinc-100">
+            <button
+              className="flex items-center gap-1.5 text-xs bg-white hover:bg-[#d96857]/5 text-[#d96857] px-3 py-1.5 rounded-full font-medium transition-all border border-[#d96857] disabled:opacity-50"
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.multiple = true;
+                input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip';
+                input.onchange = (e) => {
+                  const files = (e.target as HTMLInputElement).files;
+                  if (files?.length) {
+                    handleChatUpload(files, 'file');
                   }
-                }
+                };
+                input.click();
               }}
               disabled={isLoadingChat}
-            />
+            >
+              <Paperclip className="w-3.5 h-3.5" />
+              <span>Add Files</span>
+            </button>
+            
+            <button
+              className="flex items-center gap-1.5 text-xs bg-white hover:bg-[#d96857]/5 text-[#d96857] px-3 py-1.5 rounded-full font-medium transition-all border border-[#d96857] disabled:opacity-50"
+              onClick={() => setScheduleMeetingOpen(true)}
+              disabled={isLoadingChat}
+            >
+              <CalendarDays className="w-3.5 h-3.5" />
+              <span>Schedule Meeting</span>
+            </button>
+            
+            <button
+              className="flex items-center gap-1.5 text-xs bg-white hover:bg-[#d96857]/5 text-[#d96857] px-3 py-1.5 rounded-full font-medium transition-all border border-[#d96857] disabled:opacity-50"
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.multiple = true;
+                input.onchange = (e) => {
+                  const files = (e.target as HTMLInputElement).files;
+                  if (files?.length) {
+                    handleChatUpload(files, 'image');
+                  }
+                };
+                input.click();
+              }}
+              disabled={isLoadingChat}
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>Add Images</span>
+            </button>
           </div>
-          <Button
-            onClick={() => chatText.trim() && sendChat()}
-            disabled={isLoadingChat || !chatText.trim()}
-            className="rounded-2xl bg-[#d96857] text-white px-4 py-2 flex items-center gap-2 disabled:opacity-50"
-          >
-            {isLoadingChat ? (
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
-            Send
-          </Button>
+
+          {/* Message Input */}
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <Input
+                placeholder="Type a message…"
+                value={chatText}
+                onChange={(e) => setChatText(e.target.value)}
+                className="w-full rounded-xl border-zinc-200 bg-[#f9f9f8] focus:bg-white px-4 py-3 text-[#2e2e2e] placeholder:text-[#2e2e2e]/40 resize-none"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (chatText.trim()) {
+                      sendChat();
+                    }
+                  }
+                }}
+                disabled={isLoadingChat}
+              />
+            </div>
+            <Button
+              onClick={() => chatText.trim() && sendChat()}
+              disabled={isLoadingChat || !chatText.trim()}
+              className="rounded-xl bg-[#d96857] text-white px-6 py-3 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#c85746] transition-all shadow-sm hover:shadow-md"
+            >
+              {isLoadingChat ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              <span className="font-medium">Send</span>
+            </Button>
+          </div>
+        </div>
+      </CenterModal>
+
+      {/* Schedule Meeting Modal */}
+      <CenterModal
+        open={scheduleMeetingOpen}
+        onClose={() => {
+          setScheduleMeetingOpen(false);
+          setMeetingDate("");
+          setMeetingTime("");
+          setChatError(null);
+        }}
+        title="Schedule Meeting"
+      >
+        <div className="p-5">
+          <div className="space-y-3.5">
+            <div>
+              <label className="block text-sm font-medium mb-1.5 text-[#2e2e2e]">
+                Date
+              </label>
+              <input
+                type="date"
+                value={meetingDate}
+                onChange={(e) => setMeetingDate(e.target.value)}
+                min={new Date().toISOString().split('T')[0]}
+                className="w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1.5 text-[#2e2e2e]">
+                Time
+              </label>
+              <input
+                type="time"
+                value={meetingTime}
+                onChange={(e) => setMeetingTime(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
+              />
+            </div>
+          </div>
+
+          {chatError && (
+            <div className="mt-3.5 p-2.5 rounded-lg bg-red-50 border border-red-200">
+              <p className="text-xs text-red-600">{chatError}</p>
+            </div>
+          )}
+
+          <div className="flex gap-2.5 mt-5">
+            <Button
+              onClick={() => {
+                setScheduleMeetingOpen(false);
+                setMeetingDate("");
+                setMeetingTime("");
+                setChatError(null);
+              }}
+              variant="outline"
+              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium border-zinc-300 hover:bg-zinc-50 transition-all"
+              disabled={isLoadingChat}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={scheduleChatMeeting}
+              className="flex-1 px-4 py-2.5 rounded-lg bg-[#d96857] text-white hover:bg-[#c85746] disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-all shadow-sm"
+              disabled={isLoadingChat || !meetingDate || !meetingTime}
+            >
+              {isLoadingChat ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Scheduling...</span>
+                </div>
+              ) : (
+                'Schedule'
+              )}
+            </Button>
+          </div>
         </div>
       </CenterModal>
 
@@ -1519,21 +2039,247 @@ export default function ProjectDetailPage() {
         open={meetOpen}
         onClose={() => setMeetOpen(false)}
         title="Meeting Summary"
-        maxWidth="max-w-3xl"
+        maxWidth="max-w-4xl"
       >
-        <div className="text-center py-12">
-          <div className="text-[#2e2e2e]/40 mb-4">
-            <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
+        <div className="max-h-[70vh] overflow-y-auto p-6">
+          {isLoadingMeetings ? (
+            <div className="text-center py-12">
+              <div className="w-8 h-8 border-4 border-[#d96857] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <p className="text-sm text-zinc-500">Loading meetings...</p>
+            </div>
+          ) : meetingSummaries.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-[#2e2e2e]/40 mb-4">
+                <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-[#2e2e2e] mb-2">No Meeting Summaries Yet</h3>
+              <p className="text-sm text-[#2e2e2e]/60 mb-4 max-w-md mx-auto">
+                Meeting summaries will be automatically generated after your first meeting with us.
+              </p>
+              <p className="text-xs text-[#2e2e2e]/50">
+                Schedule a meeting from the chat to get started!
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {meetingSummaries.map((meeting) => (
+                <div
+                  key={meeting.id}
+                  className="bg-white border border-zinc-200 rounded-2xl p-5 hover:shadow-md transition-shadow"
+                >
+                  {/* Header */}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">
+                        {meeting.meeting_name}
+                      </h3>
+                      <div className="flex items-center gap-2 text-sm text-zinc-500">
+                        <CalendarDays className="w-4 h-4" />
+                        <span>{new Date(meeting.meeting_date).toLocaleDateString('en-US', { 
+                          month: 'long', 
+                          day: 'numeric', 
+                          year: 'numeric' 
+                        })}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Status Badge */}
+                    <div>
+                      {meeting.status === 'approved' && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          Approved
+                        </span>
+                      )}
+                      {meeting.status === 'changes_needed' && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          Changes Needed
+                        </span>
+                      )}
+                      {meeting.status === 'pending' && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-700">
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                          </svg>
+                          Pending Review
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Meeting Minutes Points */}
+                  <div className="mb-4">
+                    <h4 className="text-sm font-semibold text-[#2e2e2e] mb-3">Meeting Minutes:</h4>
+                    {(() => {
+                      // Parse mom_points if it's a string, otherwise use as is
+                      const data = typeof meeting.mom_points === 'string' 
+                        ? JSON.parse(meeting.mom_points) 
+                        : (meeting.mom_points || {});
+                      
+                      return (
+                        <div className="space-y-4">
+                          {/* Summary */}
+                          {data.summary && (
+                            <div>
+                              <p className="text-sm text-[#2e2e2e]/90 leading-relaxed">{data.summary}</p>
+                            </div>
+                          )}
+
+                          {/* Key Decisions */}
+                          {data.key_decisions && Array.isArray(data.key_decisions) && data.key_decisions.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-semibold text-[#d96857] uppercase tracking-wide mb-2">Key Decisions</h5>
+                              <ul className="space-y-1.5 pl-5">
+                                {data.key_decisions.map((item: string, idx: number) => (
+                                  <li key={idx} className="text-sm text-[#2e2e2e]/80 list-disc">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Next Steps */}
+                          {data.next_steps && Array.isArray(data.next_steps) && data.next_steps.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-semibold text-[#d96857] uppercase tracking-wide mb-2">Next Steps</h5>
+                              <ul className="space-y-1.5 pl-5">
+                                {data.next_steps.map((item: string, idx: number) => (
+                                  <li key={idx} className="text-sm text-[#2e2e2e]/80 list-disc">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Action Items for Team */}
+                          {data.action_items_for_team && Array.isArray(data.action_items_for_team) && data.action_items_for_team.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-semibold text-[#d96857] uppercase tracking-wide mb-2">Action Items for Team</h5>
+                              <ul className="space-y-1.5 pl-5">
+                                {data.action_items_for_team.map((item: string, idx: number) => (
+                                  <li key={idx} className="text-sm text-[#2e2e2e]/80 list-disc">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Action Items for Designer */}
+                          {data.action_items_for_designer && Array.isArray(data.action_items_for_designer) && data.action_items_for_designer.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-semibold text-[#d96857] uppercase tracking-wide mb-2">Action Items for Designer</h5>
+                              <ul className="space-y-1.5 pl-5">
+                                {data.action_items_for_designer.map((item: string, idx: number) => (
+                                  <li key={idx} className="text-sm text-[#2e2e2e]/80 list-disc">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Meeting Notes */}
+                          {data.meeting_notes && Array.isArray(data.meeting_notes) && data.meeting_notes.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-semibold text-[#d96857] uppercase tracking-wide mb-2">Meeting Notes</h5>
+                              <ul className="space-y-1.5 pl-5">
+                                {data.meeting_notes.map((item: string, idx: number) => (
+                                  <li key={idx} className="text-sm text-[#2e2e2e]/80 list-disc">{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Client Feedback */}
+                  {meeting.client_feedback && (
+                    <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                      <p className="text-xs font-semibold text-orange-800 mb-1">Your Feedback:</p>
+                      <p className="text-sm text-orange-700">{meeting.client_feedback}</p>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  {meeting.status !== 'approved' && (
+                    <div className="flex gap-2 pt-3 border-t border-zinc-100">
+                      <button
+                        onClick={() => handleMeetingApproval(meeting.id, 'approved')}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors text-sm font-medium"
+                      >
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => {
+                          setFeedbackModal({ open: true, meetingId: meeting.id });
+                          setFeedbackText(meeting.client_feedback || '');
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-orange-500 text-orange-600 hover:bg-orange-50 transition-colors text-sm font-medium"
+                      >
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                        </svg>
+                        Request Changes
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CenterModal>
+
+      {/* Feedback Modal */}
+      <CenterModal
+        open={feedbackModal?.open || false}
+        onClose={() => {
+          setFeedbackModal({ open: false, meetingId: '' });
+          setFeedbackText("");
+        }}
+        title="Request Changes"
+        maxWidth="max-w-lg"
+      >
+        <div className="p-5">
+          <p className="text-sm text-zinc-600 mb-4">
+            Please describe the changes you'd like to see in this meeting summary:
+          </p>
+          <textarea
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            placeholder="Enter your feedback here..."
+            rows={5}
+            className="w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm resize-none"
+          />
+          <div className="flex gap-2.5 mt-4">
+            <button
+              onClick={() => {
+                setFeedbackModal({ open: false, meetingId: null });
+                setFeedbackText("");
+              }}
+              className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium border border-zinc-300 hover:bg-zinc-50 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                if (feedbackModal?.meetingId && feedbackText.trim()) {
+                  handleMeetingApproval(feedbackModal.meetingId, 'changes_needed', feedbackText.trim());
+                }
+              }}
+              disabled={!feedbackText.trim()}
+              className="flex-1 px-4 py-2.5 rounded-lg bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-all"
+            >
+              Submit Feedback
+            </button>
           </div>
-          <h3 className="text-lg font-semibold text-[#2e2e2e] mb-2">No Meeting Summaries Yet</h3>
-          <p className="text-sm text-[#2e2e2e]/60 mb-4 max-w-md mx-auto">
-            Meeting summaries will be automatically generated after your first meeting with us.
-          </p>
-          <p className="text-xs text-[#2e2e2e]/50">
-            Schedule a meeting from the chat to get started!
-          </p>
         </div>
       </CenterModal>
 
@@ -1606,22 +2352,23 @@ export default function ProjectDetailPage() {
         </div>
       </CenterModal>
 
-      {/* Files */}
+      {/* Project Folder (User Uploaded Files) */}
       <CenterModal
         open={filesOpen}
         onClose={() => {
           setFilesOpen(false);
           setUploadError(null);
         }}
-        title="Project Files"
+        title="Project Folder"
         maxWidth="max-w-4xl"
       >
+        <div className="px-6 pb-6">
         {/* Upload Section */}
         <div className="mb-6 p-4 border-2 border-dashed border-[#d96857]/30 rounded-2xl bg-[#d96857]/5">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-semibold text-[#2e2e2e] mb-1">Upload Files</h3>
-              <p className="text-xs text-[#2e2e2e]/60">Add documents, images, or any project-related files</p>
+              <p className="text-xs text-[#2e2e2e]/60">Add your documents, images, or any project-related files</p>
             </div>
             <div className="flex gap-2">
               <input
@@ -1665,36 +2412,194 @@ export default function ProjectDetailPage() {
           )}
         </div>
 
-        {/* Files List */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {(files ?? []).map((f) => (
+        {/* Files Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-6">
+          {userFiles.map((f) => {
+            const fileUrl = f.file_url || f.url;
+            const fileName = f.file_name || f.name || fileUrl?.split('/').pop() || 'File';
+            const fileType = f.file_type || f.type || fileName.split('.').pop()?.toLowerCase() || 'file';
+            const isImage = fileType === 'png' || fileType === 'jpg' || fileType === 'jpeg' || fileType === 'gif' || fileType === 'webp';
+            
+            return (
             <a
               key={f.id}
-              href={f.url}
+              href={fileUrl}
               target="_blank"
               rel="noreferrer"
-              className="border rounded-2xl p-3 hover:bg-black/5 transition-all hover:shadow-md"
+              className="group relative bg-white border-2 border-zinc-200 rounded-2xl hover:border-[#d96857] hover:shadow-xl hover:shadow-[#d96857]/10 transition-all duration-200 overflow-hidden cursor-pointer"
             >
-              <div className="text-xs text-black/60 mb-1">{f.type.toUpperCase()}</div>
-              <div className="flex items-center gap-2">
-                <div className="w-14 h-14 rounded-xl bg-[#d96857]/10 flex items-center justify-center">
-                  <span className="text-xs font-semibold text-[#d96857]">{f.type.toUpperCase()}</span>
+              {/* Thumbnail/Icon Area */}
+              <div className="aspect-square bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center relative overflow-hidden">
+                {isImage ? (
+                  <div className="absolute inset-0">
+                    <img 
+                      src={fileUrl} 
+                      alt={fileName}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                ) : fileType === 'pdf' ? (
+                  <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                ) : (
+                  <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                )}
+                
+                {/* Type Badge */}
+                <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/95 backdrop-blur-sm shadow-lg">
+                  <span className="text-[10px] font-bold text-[#d96857] uppercase tracking-wide">
+                    {fileType}
+                  </span>
                 </div>
-                <div className="truncate text-sm">{f.url.split('/').pop() || 'File'}</div>
+
+                {/* Hover Action */}
+                <div className="absolute inset-0 bg-[#d96857]/90 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <div className="text-white text-center">
+                    <svg className="w-8 h-8 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    <span className="text-xs font-medium">Open</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* File Name */}
+              <div className="p-3 bg-white">
+                <p className="text-xs font-semibold text-[#2e2e2e] truncate group-hover:text-[#d96857] transition-colors" title={fileName}>
+                  {fileName}
+                </p>
+                <p className="text-[10px] text-zinc-500 mt-0.5">
+                  {isImage ? 'Image' : 
+                   fileType === 'pdf' ? 'PDF' : 
+                   fileType === 'doc' || fileType === 'docx' ? 'Word' :
+                   fileType === 'xls' || fileType === 'xlsx' ? 'Excel' :
+                   fileType === 'dwg' ? 'AutoCAD' :
+                   'Document'}
+                </p>
               </div>
             </a>
-          ))}
-          {(!files || files.length === 0) && (
-            <div className="col-span-full text-center py-8">
-              <div className="text-[#2e2e2e]/40 mb-2">
-                <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            );
+          })}
+          
+          {userFiles.length === 0 && (
+            <div className="col-span-full text-center py-16">
+              <div className="w-20 h-20 rounded-2xl bg-zinc-100 flex items-center justify-center mx-auto mb-4">
+                <svg className="w-10 h-10 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
                 </svg>
               </div>
-              <p className="text-sm text-[#2e2e2e]/60">No files uploaded yet</p>
-              <p className="text-xs text-[#2e2e2e]/40 mt-1">Click "Choose Files" to upload documents</p>
+              <h3 className="text-base font-semibold text-[#2e2e2e] mb-2">No files uploaded yet</h3>
+              <p className="text-sm text-zinc-500">Click "Choose Files" to upload documents</p>
             </div>
           )}
+        </div>
+        </div>
+      </CenterModal>
+
+      {/* Final Files (Team Uploaded - View Only) */}
+      <CenterModal
+        open={finalFilesOpen}
+        onClose={() => setFinalFilesOpen(false)}
+        title="Final Files"
+        maxWidth="max-w-4xl"
+      >
+        <div className="px-6 pb-6">
+          {/* Files Grid - View Only */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {finalFiles.map((f) => {
+              const fileUrl = f.file_url || f.url;
+              const fileName = f.file_name || f.name || fileUrl?.split('/').pop() || 'File';
+              const fileType = f.file_type || f.type || fileName.split('.').pop()?.toLowerCase() || 'file';
+              const isImage = fileType === 'png' || fileType === 'jpg' || fileType === 'jpeg' || fileType === 'gif' || fileType === 'webp';
+              
+              return (
+              <a
+                key={f.id}
+                href={fileUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="group relative bg-white border-2 border-zinc-200 rounded-2xl hover:border-[#d96857] hover:shadow-xl hover:shadow-[#d96857]/10 transition-all duration-200 overflow-hidden cursor-pointer"
+              >
+                {/* Thumbnail/Icon Area */}
+                <div className="aspect-square bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center relative overflow-hidden">
+                  {isImage ? (
+                    <div className="absolute inset-0">
+                      <img 
+                        src={fileUrl} 
+                        alt={fileName}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </div>
+                  ) : fileType === 'pdf' ? (
+                    <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  ) : fileType === 'xlsx' || fileType === 'xls' ? (
+                    <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  )}
+                  
+                  {/* Type Badge */}
+                  <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/95 backdrop-blur-sm shadow-lg">
+                    <span className="text-[10px] font-bold text-[#d96857] uppercase tracking-wide">
+                      {fileType}
+                    </span>
+                  </div>
+
+                  {/* Hover Action */}
+                  <div className="absolute inset-0 bg-[#d96857]/90 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="text-white text-center">
+                      <svg className="w-8 h-8 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      <span className="text-xs font-medium">Download</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* File Name & Description */}
+                <div className="p-3 bg-white">
+                  <p className="text-xs font-semibold text-[#2e2e2e] truncate group-hover:text-[#d96857] transition-colors" title={fileName}>
+                    {fileName}
+                  </p>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">
+                    {fileType === 'pdf' ? 'PDF' : 
+                     fileType === 'xlsx' || fileType === 'xls' ? 'Excel' :
+                     fileType === 'dwg' ? 'AutoCAD' :
+                     fileType === 'doc' || fileType === 'docx' ? 'Word' :
+                     isImage ? 'Image' :
+                     'Document'}
+                  </p>
+                  {f.description && (
+                    <p className="text-[10px] text-zinc-400 mt-1 line-clamp-2" title={f.description}>{f.description}</p>
+                  )}
+                </div>
+              </a>
+            );
+            })}
+            
+            {finalFiles.length === 0 && (
+              <div className="col-span-full text-center py-16">
+                <div className="w-20 h-20 rounded-2xl bg-zinc-100 flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-10 h-10 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <h3 className="text-base font-semibold text-[#2e2e2e] mb-2">No final files yet</h3>
+                <p className="text-sm text-zinc-500">Final files will appear here once uploaded by our team</p>
+              </div>
+            )}
+          </div>
         </div>
       </CenterModal>
 
@@ -1779,27 +2684,27 @@ export default function ProjectDetailPage() {
         title="Delete Project?"
         maxWidth="max-w-md"
       >
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-100 rounded-xl">
+        <div className="px-6 pb-6 space-y-6">
+          <div className="flex items-start gap-4 p-5 bg-red-50 border border-red-100 rounded-xl">
             <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
               <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
             </div>
-            <div>
-              <h3 className="text-sm font-semibold text-red-900">Warning: This action cannot be undone</h3>
-              <p className="text-xs text-red-700 mt-1">
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-red-900 mb-1.5">Warning: This action cannot be undone</h3>
+              <p className="text-xs text-red-700 leading-relaxed">
                 All project data, files, and chat history will be permanently deleted.
               </p>
             </div>
           </div>
 
-          <div className="p-4 bg-gray-50 rounded-xl">
-            <p className="text-sm text-[#2e2e2e] font-medium mb-1">Project Details:</p>
-            <div className="text-xs text-[#2e2e2e]/70 space-y-1">
-              <div><span className="font-medium">Name:</span> {project.name}</div>
-              <div><span className="font-medium">Code:</span> {projectCode}</div>
-              {project.address && <div><span className="font-medium">Address:</span> {project.address}</div>}
+          <div className="p-5 bg-gray-50 rounded-xl">
+            <p className="text-sm text-[#2e2e2e] font-semibold mb-3">Project Details:</p>
+            <div className="text-sm text-[#2e2e2e]/70 space-y-2">
+              <div><span className="font-medium text-[#2e2e2e]">Name:</span> {project.name}</div>
+              <div><span className="font-medium text-[#2e2e2e]">Code:</span> {projectCode}</div>
+              {project.address && <div><span className="font-medium text-[#2e2e2e]">Address:</span> {project.address}</div>}
             </div>
           </div>
 
@@ -1807,7 +2712,7 @@ export default function ProjectDetailPage() {
             <Button
               onClick={handleDeleteProject}
               disabled={isDeleting}
-              className="flex-1 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              className="flex-1 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2 py-3"
             >
               {isDeleting ? (
                 <>
@@ -1827,7 +2732,7 @@ export default function ProjectDetailPage() {
               variant="outline"
               onClick={() => setShowDeleteConfirm(false)}
               disabled={isDeleting}
-              className="flex-1"
+              className="flex-1 py-3"
             >
               Cancel
             </Button>

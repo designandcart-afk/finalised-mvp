@@ -64,8 +64,8 @@ export default function ProductCard({ product }: ProductCardProps) {
             {product.title}
           </h3>
           {product.brand && (
-            <div className="text-sm text-[#2e2e2e]/60 font-medium mt-0.5">
-              {product.brand}
+            <div className="text-sm text-[#2e2e2e]/60 font-medium mt-0.5 capitalize">
+              {product.brand.toLowerCase()}
             </div>
           )}
 

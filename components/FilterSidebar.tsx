@@ -46,30 +46,43 @@ export default function FilterSidebar({
     filters.priceRange[0] !== minPrice ||
     filters.priceRange[1] !== maxPrice;
 
+  const activeFilterCount = filters.categories.length + filters.roomTypes.length + filters.colors.length + 
+    (filters.priceRange[0] !== minPrice || filters.priceRange[1] !== maxPrice ? 1 : 0);
+
   const filterContent = (
     <div className="space-y-6">
+      {/* Active Filter Badge */}
+      {activeFilterCount > 0 && (
+        <div className="flex items-center justify-between pb-4 border-b border-zinc-100">
+          <span className="text-xs text-zinc-500">Active Filters</span>
+          <span className="px-2 py-0.5 bg-[#d96857] text-white text-xs font-medium rounded-full">
+            {activeFilterCount}
+          </span>
+        </div>
+      )}
+
       {/* Sort By */}
-      <div className="space-y-2">
+      <div className="space-y-2 pb-6 border-b border-zinc-100">
         <h3 className="font-medium text-sm text-[#2e2e2e] mb-3">Sort By</h3>
         <div className="relative">
           <select
             value={filters.sortBy}
             onChange={(e) => onUpdateFilters({ sortBy: e.target.value })}
-            className="w-full border border-zinc-200 rounded-lg px-3 py-2 pr-8 bg-white text-sm text-[#2e2e2e] focus:outline-none focus:border-[#d96857] transition-colors cursor-pointer"
+            className="w-full border-0 rounded-full px-4 py-3 pr-10 bg-[#f2f0ed] text-sm text-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 transition-all cursor-pointer appearance-none placeholder:text-zinc-400"
           >
             <option value="newest">Newest First</option>
             <option value="price-low">Price: Low to High</option>
             <option value="price-high">Price: High to Low</option>
             <option value="rating">Highest Rated</option>
           </select>
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#2e2e2e]/50">
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
             ▼
           </div>
         </div>
       </div>
 
       {/* Room Types */}
-      <div>
+      <div className="pb-6 border-b border-zinc-100">
         <h3 className="font-medium text-sm text-[#2e2e2e] mb-3">Room Type</h3>
         <div className="flex flex-wrap gap-2">
           {ROOM_TYPES.map(room => (
@@ -82,9 +95,9 @@ export default function FilterSidebar({
                     : [...filters.roomTypes, room]
                 });
               }}
-              className={`px-3 py-1.5 rounded-full text-sm ${
+              className={`px-3 py-1.5 rounded-full text-sm transition-all ${
                 filters.roomTypes.includes(room)
-                  ? 'bg-[#d96857] text-white'
+                  ? 'bg-[#d96857] text-white shadow-md shadow-[#d96857]/30 scale-105'
                   : 'bg-[#f2f0ed] text-zinc-700 hover:bg-zinc-200'
               }`}
             >
@@ -95,11 +108,11 @@ export default function FilterSidebar({
       </div>
 
       {/* Categories */}
-      <div>
+      <div className="pb-6 border-b border-zinc-100">
         <h3 className="font-medium text-sm text-[#2e2e2e] mb-3">Categories</h3>
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {categories.map(cat => (
-            <label key={cat} className="flex items-center">
+            <label key={cat} className="flex items-center cursor-pointer group">
               <input
                 type="checkbox"
                 checked={filters.categories.includes(cat)}
@@ -110,18 +123,18 @@ export default function FilterSidebar({
                       : filters.categories.filter(c => c !== cat)
                   });
                 }}
-                className="w-4 h-4 rounded border-zinc-300 text-[#d96857] focus:ring-[#d96857]"
+                className="w-4 h-4 rounded border-2 border-zinc-400 text-[#d96857] focus:ring-2 focus:ring-[#d96857]/30 focus:ring-offset-0 checked:border-[#d96857] transition-colors cursor-pointer"
               />
-              <span className="ml-2 text-sm text-zinc-700">{cat}</span>
+              <span className="ml-3 text-sm text-zinc-700 group-hover:text-[#2e2e2e] transition-colors">{cat}</span>
             </label>
           ))}
         </div>
       </div>
 
       {/* Colors */}
-      <div>
+      <div className="pb-6 border-b border-zinc-100">
         <h3 className="font-medium text-sm text-[#2e2e2e] mb-3">Colors</h3>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-3">
           {colors.map(color => (
             <button
               key={color.value}
@@ -132,12 +145,12 @@ export default function FilterSidebar({
                     : [...filters.colors, color.value]
                 });
               }}
-              className={`w-7 h-7 rounded-full flex items-center justify-center ${
-                color.border ? 'border border-zinc-200' : ''
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                color.border ? 'border-2 border-zinc-300' : ''
               } ${
                 filters.colors.includes(color.value)
-                  ? 'ring-2 ring-[#d96857] ring-offset-2'
-                  : ''
+                  ? 'ring-2 ring-[#d96857] ring-offset-2 scale-110'
+                  : 'hover:scale-110'
               }`}
               style={{ backgroundColor: color.value }}
               title={color.name}
@@ -157,12 +170,12 @@ export default function FilterSidebar({
       </div>
 
       {/* Price Range */}
-      <div>
+      <div className="pb-6">
         <h3 className="font-medium text-sm text-[#2e2e2e] mb-3">Price Range</h3>
-        <div className="space-y-4">
-          <div className="flex gap-4">
+        <div className="space-y-3">
+          <div className="flex gap-3">
             <div className="flex-1">
-              <label className="text-xs text-zinc-500 mb-1 block">Min Price</label>
+              <label className="text-xs text-zinc-500 mb-1.5 block">Min</label>
               <input
                 type="number"
                 min={minPrice}
@@ -174,11 +187,11 @@ export default function FilterSidebar({
                     priceRange: [value, Math.max(value, filters.priceRange[1])]
                   });
                 }}
-                className="w-full border border-zinc-200 rounded-lg px-3 py-1.5 text-sm"
+                className="w-full border-0 bg-[#f2f0ed] rounded-lg px-3 py-2 text-sm text-[#2e2e2e] focus:outline-none focus:ring-2 focus:ring-[#d96857]/20"
               />
             </div>
             <div className="flex-1">
-              <label className="text-xs text-zinc-500 mb-1 block">Max Price</label>
+              <label className="text-xs text-zinc-500 mb-1.5 block">Max</label>
               <input
                 type="number"
                 min={filters.priceRange[0]}
@@ -190,7 +203,7 @@ export default function FilterSidebar({
                     priceRange: [filters.priceRange[0], value]
                   });
                 }}
-                className="w-full border border-zinc-200 rounded-lg px-3 py-1.5 text-sm"
+                className="w-full border-0 bg-[#f2f0ed] rounded-lg px-3 py-2 text-sm text-[#2e2e2e] focus:outline-none focus:ring-2 focus:ring-[#d96857]/20"
               />
             </div>
           </div>
@@ -204,7 +217,7 @@ export default function FilterSidebar({
                 priceRange: [filters.priceRange[0], parseInt(e.target.value)]
               });
             }}
-            className="w-full accent-[#d96857]"
+            className="w-full h-0.5 accent-[#2e2e2e] bg-zinc-300 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#2e2e2e] [&::-webkit-slider-thumb]:cursor-pointer"
           />
         </div>
       </div>
@@ -213,7 +226,7 @@ export default function FilterSidebar({
       {hasActiveFilters && (
         <button
           onClick={onClearFilters}
-          className="text-[#d96857] hover:text-[#c85745] text-sm font-medium"
+          className="text-[#d96857] hover:text-[#c85745] text-sm font-medium transition-colors"
         >
           Clear all filters
         </button>

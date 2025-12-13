@@ -66,7 +66,10 @@ export default function ProductsPage() {
   const categories = useMemo(() => {
     const set = new Set<string>();
     products.forEach((p) => p.category && set.add(p.category));
-    return Array.from(set).sort();
+    const cats = Array.from(set).sort();
+    console.log('Available categories:', cats);
+    console.log('Sample product categories:', products.slice(0, 5).map(p => ({ id: p.id, category: p.category })));
+    return cats;
   }, [products]);
 
   // Price range
@@ -86,7 +89,7 @@ export default function ProductsPage() {
 
   const filteredProducts = useMemo(() => {
     const q = deferredQuery.toLowerCase().trim();
-    return products
+    const filtered = products
       .filter((p) => {
         const matchQuery = !q || 
           p.name?.toLowerCase().includes(q) ||
@@ -112,6 +115,9 @@ export default function ProductsPage() {
             return (b.created_at || '').localeCompare(a.created_at || '');
         }
       });
+    console.log('Active filters:', filters);
+    console.log('Filtered products count:', filtered.length, 'out of', products.length);
+    return filtered;
   }, [products, filters, deferredQuery]);
 
   const updateFilters = (newFilters: Partial<FilterState>) => {
@@ -214,10 +220,25 @@ export default function ProductsPage() {
                 <div className="text-center py-12">Loading products...</div>
               ) : error ? (
                 <div className="text-center py-12 text-red-500">{error}</div>
+              ) : filteredProducts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20">
+                  <div className="w-20 h-20 bg-[#f2f0ed] rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-10 h-10 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-[#2e2e2e] mb-2">No products found</h3>
+                  <p className="text-sm text-zinc-500 mb-6">Try adjusting your filters to see more results</p>
+                  <button
+                    onClick={clearFilters}
+                    className="px-6 py-2.5 bg-[#d96857] text-white rounded-full text-sm font-medium hover:bg-[#c85745] transition-colors"
+                  >
+                    Clear all filters
+                  </button>
+                </div>
               ) : (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {filteredProducts.map((product) => {
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                  {filteredProducts.map((product) => {
                       // Handle multiple images: split by comma, JSON, or fallback
                       let images: string[] = [];
                       if (product.image_url) {
@@ -255,19 +276,7 @@ export default function ProductsPage() {
                         }} />
                       );
                     })}
-                  </div>
-                  {filteredProducts.length === 0 && (
-                    <div className="text-center py-12">
-                      <p className="text-zinc-500">No products found matching your filters.</p>
-                      <button
-                        onClick={clearFilters}
-                        className="mt-4 text-[#d96857] hover:text-[#c85745] text-sm font-medium"
-                      >
-                        Clear all filters
-                      </button>
-                    </div>
-                  )}
-                </>
+                </div>
               )}
             </div>
           </div>

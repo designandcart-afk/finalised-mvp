@@ -6,12 +6,14 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/auth/authContext';
 import { useRouter, usePathname } from 'next/navigation';
 import SignInModal from './SignInModal';
+import { useProjects } from '@/lib/contexts/projectsContext';
 
 export default function Header() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showSignInModal, setShowSignInModal] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { user, signOut } = useAuth();
+  const { projects } = useProjects();
   const router = useRouter();
   const pathname = usePathname();
 

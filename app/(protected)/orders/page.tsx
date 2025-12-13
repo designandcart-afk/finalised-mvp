@@ -1,59 +1,91 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useAuth } from "@/lib/auth/authContext";
-import { demoOrders, demoProductsAll } from "@/lib/demoData";
+import { useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import { useProjects } from "@/lib/contexts/projectsContext";
 
-type CartLine = { id: string; productId: string; qty: number; projectId?: string; area?: string };
-type Order = { id: string; items: CartLine[]; total: number; status: string; ts: number };
-
-const ORDERS_KEY = "dc:orders";
+type Order = {
+  id: string;
+  created_at: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  items: any[];
+  project_ids: string[];
+  paid_at: string | null;
+  delivery_status?: string;
+  estimated_delivery?: string;
+  tracking_id?: string;
+};
 
 export default function OrdersPage() {
-  const { isDemo, user } = useAuth();
+  const { projects } = useProjects();
+  const searchParams = useSearchParams();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [successMessage, setSuccessMessage] = useState("");
 
   useEffect(() => {
-    if (isDemo) {
-      // Demo mode - use demo orders
-      const existing = localStorage.getItem(ORDERS_KEY);
-      let loadedOrders: Order[] = [];
-      
-      if (!existing || existing === "[]") {
-        // preload demo orders if none exist
-        localStorage.setItem(ORDERS_KEY, JSON.stringify(demoOrders));
-        loadedOrders = demoOrders;
-      } else {
-        loadedOrders = JSON.parse(existing);
-      }
-      
-      setOrders(loadedOrders);
-    } else {
-      // Real user mode - start with empty orders
-      // In a real app, you would fetch user-specific orders from a database
-      const userOrdersKey = `dc:orders:${user?.id || 'user'}`;
-      const existing = localStorage.getItem(userOrdersKey);
-      const loadedOrders = existing ? JSON.parse(existing) : [];
-      setOrders(loadedOrders);
+    // Check for success message from payment redirect
+    if (searchParams.get('success') === 'true') {
+      setSuccessMessage('Payment successful! Your order has been placed.');
+      // Clear the message after 5 seconds
+      setTimeout(() => setSuccessMessage(''), 5000);
     }
     
-    setLoading(false);
-  }, [isDemo, user]);
+    loadOrders();
+  }, [searchParams]);
 
-  function updateStatus(id: string, status: string) {
-    const next = orders.map((o) => (o.id === id ? { ...o, status } : o));
-    setOrders(next);
-    
-    const storageKey = isDemo ? ORDERS_KEY : `dc:orders:${user?.id || 'user'}`;
-    localStorage.setItem(storageKey, JSON.stringify(next));
+  async function loadOrders() {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error loading orders:', error);
+        return;
+      }
+
+      setOrders(data || []);
+    } catch (err) {
+      console.error('Error in loadOrders:', err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   if (loading) {
     return (
-      <main className="p-10 text-zinc-500">Loading Orders...</main>
+      <main className="min-h-screen bg-white p-10">
+        <div className="text-zinc-500">Loading Orders...</div>
+      </main>
     );
   }
+
+  // Group orders by project
+  const ordersByProject = orders.reduce((acc, order) => {
+    order.project_ids?.forEach(projectId => {
+      if (!acc[projectId]) {
+        acc[projectId] = [];
+      }
+      acc[projectId].push(order);
+    });
+    
+    // Also add to "general" if no projects
+    if (!order.project_ids || order.project_ids.length === 0) {
+      if (!acc['general']) {
+        acc['general'] = [];
+      }
+      acc['general'].push(order);
+    }
+    
+    return acc;
+  }, {} as Record<string, Order[]>);
 
   return (
     <main className="min-h-screen bg-white">
@@ -63,58 +95,125 @@ export default function OrdersPage() {
           <h1 className="text-2xl font-semibold text-[#2e2e2e]">Orders</h1>
         </div>
 
+        {successMessage && (
+          <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-2xl text-green-700">
+            {successMessage}
+          </div>
+        )}
+
         {orders.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-300 p-10 text-center text-zinc-500">
             No orders found.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-2xl border border-zinc-200 shadow-sm">
-            <table className="w-full text-sm">
-              <thead className="bg-[#f2f0ed] text-[#2e2e2e]">
-                <tr>
-                  <th className="text-left p-3">Order ID</th>
-                  <th className="text-left p-3">Items</th>
-                  <th className="text-left p-3">Total</th>
-                  <th className="text-left p-3">Status</th>
-                  <th className="text-left p-3">Placed</th>
-                  <th className="text-left p-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((o) => (
-                  <tr key={o.id} className="border-t hover:bg-[#f9f9f8] transition">
-                    <td className="p-3 font-medium text-[#2e2e2e]">{o.id}</td>
-                    <td className="p-3">
-                      {o.items.length} item{o.items.length === 1 ? "" : "s"}
-                    </td>
-                    <td className="p-3 font-semibold text-[#2e2e2e]">
-                      ₹{o.total.toLocaleString("en-IN")}
-                    </td>
-                    <td className="p-3">
-                      <span
-                        className={`px-3 py-1 rounded-2xl text-xs font-medium ${
-                          o.status === "Delivered"
-                            ? "bg-green-100 text-green-700"
-                            : o.status === "Placed"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-zinc-100 text-zinc-600"
-                        }`}
-                      >
-                        {o.status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-xs text-zinc-600">
-                      {new Date(o.ts).toLocaleString()}
-                    </td>
-                    <td className="p-3">
-                      <div className="flex flex-wrap gap-2">
-                        <a href={`/orders/${o.id}`} className="px-3 py-1 text-xs rounded-2xl border border-zinc-300 text-[#2e2e2e] hover:bg-black/5">Details</a>
+          <div className="space-y-6">
+            {/* Orders grouped by project */}
+            {Object.entries(ordersByProject).map(([projectId, projectOrders]) => {
+              const project = projects.find(p => p.id === projectId);
+              
+              return (
+                <div key={projectId} className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                  {/* Project Header */}
+                  <div className="bg-gradient-to-r from-[#f2f0ed] to-white p-4 border-b border-zinc-200">
+                    <div className="font-semibold text-[#2e2e2e]">
+                      {projectId === 'general' ? 'General Orders' : (project?.name || 'Unknown Project')}
+                    </div>
+                    {project?.address && (
+                      <div className="text-xs text-zinc-600 mt-0.5">
+                        {project.address}
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    )}
+                    <div className="text-xs text-zinc-500 mt-1">
+                      {projectOrders.length} order{projectOrders.length > 1 ? 's' : ''}
+                    </div>
+                  </div>
+
+                  {/* Orders Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-zinc-50 text-[#2e2e2e]">
+                        <tr>
+                          <th className="text-left p-3">Order ID</th>
+                          <th className="text-left p-3">Items</th>
+                          <th className="text-left p-3">Delivery Status</th>
+                          <th className="text-left p-3">Amount</th>
+                          <th className="text-left p-3">Date</th>
+                          <th className="text-center p-3">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {projectOrders.map((order) => {
+                          const deliveryStatus = order.delivery_status || 'order_placed';
+                          const statusConfig = {
+                            order_placed: { label: 'Order Placed', color: 'bg-[#d96857]/10 text-[#d96857]', icon: '📦' },
+                            processing: { label: 'Processing', color: 'bg-[#d96857]/20 text-[#c85746]', icon: '⚙️' },
+                            shipped: { label: 'Shipped', color: 'bg-[#2e2e2e]/10 text-[#2e2e2e]', icon: '🚚' },
+                            delivered: { label: 'Delivered', color: 'bg-[#2e2e2e]/5 text-[#2e2e2e] border border-[#2e2e2e]/20', icon: '✅' }
+                          };
+                          const status = statusConfig[deliveryStatus as keyof typeof statusConfig] || statusConfig.order_placed;
+                          
+                          return (
+                            <tr 
+                              key={order.id} 
+                              className="border-t hover:bg-[#f9f9f8] transition"
+                            >
+                              <td className="p-3">
+                                <div className="font-medium text-[#2e2e2e]">#{order.id.slice(0, 8).toUpperCase()}</div>
+                              </td>
+                              <td className="p-3">
+                                <div className="flex items-center gap-2">
+                                  {order.items?.[0]?.imageUrl && (
+                                    <img 
+                                      src={order.items[0].imageUrl} 
+                                      alt=""
+                                      className="w-10 h-10 object-cover rounded border border-zinc-200"
+                                    />
+                                  )}
+                                  <div>
+                                    <div className="text-[#2e2e2e] font-medium text-sm">
+                                      {order.items?.[0]?.title || 'Product'}
+                                    </div>
+                                    {order.items?.length > 1 && (
+                                      <div className="text-xs text-zinc-500">+{order.items.length - 1} more</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                <span className={`px-3 py-1.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 ${status.color}`}>
+                                  <span>{status.icon}</span>
+                                  {status.label}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <div className="font-semibold text-[#2e2e2e]">
+                                  ₹{order.amount.toLocaleString('en-IN')}
+                                </div>
+                              </td>
+                              <td className="p-3 text-sm text-zinc-600">
+                                {new Date(order.created_at).toLocaleDateString('en-IN', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  year: 'numeric'
+                                })}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  onClick={() => window.location.href = `/orders/${order.id}`}
+                                  className="px-4 py-2 rounded-xl bg-[#d96857] text-white text-xs font-medium hover:bg-[#c85746] transition"
+                                >
+                                  Track Order
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

@@ -42,7 +42,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
           const { supabase } = await import('@/lib/supabase');
           const { data, error } = await supabase
             .from('projects')
-            .select('id, project_code, project_name, scope_of_work, address_full, areas, status, created_at, notes')
+            .select('id, project_code, project_name, scope_of_work, address_full, areas, status, created_at, notes, project_folder_url')
             .eq('user_id', user.id)
             .order('created_at', { ascending: false });
           if (error) {
@@ -51,6 +51,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
           } else {
             const mapped: DemoProject[] = (data || []).map((row: any) => ({
               id: String(row.id ?? row.project_code ?? (String(row.project_name || 'P') + '-' + String(row.created_at || Date.now()))),
+              project_code: row.project_code,
               name: row.project_name,
               scope: row.scope_of_work,
               address: row.address_full || undefined,
@@ -60,6 +61,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
               status: row.status || 'wip',
               uploads: [],
               createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+              project_folder_url: row.project_folder_url || undefined,
             }));
             setProjects(mapped);
           }
@@ -109,6 +111,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
           project_name: projectData.name,
           scope_of_work: projectData.scope,
           address_full: projectData.address,
+          pincode: projectData.pincode,
           notes: projectData.notes,
           areas: projectData.areas,
         }),
@@ -124,12 +127,13 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         try {
           const { data, error } = await (await import('@/lib/supabase')).supabase
             .from('projects')
-            .select('id, project_code, project_name, scope_of_work, address_full, areas, status, created_at, notes')
+            .select('id, project_code, project_name, scope_of_work, address_full, pincode, areas, status, created_at, notes')
             .eq('user_id', user.id)
             .order('created_at', { ascending: false });
           if (!error) {
             const mapped: DemoProject[] = (data || []).map((row: any) => ({
               id: String(row.id ?? row.project_code),
+              project_code: row.project_code,
               name: row.project_name,
               scope: row.scope_of_work,
               address: row.address_full || undefined,
@@ -149,6 +153,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         // Return a mapped project based on the response
         return {
           name: project.project_name,
+          project_code: project.project_code,
           scope: project.scope_of_work,
           address: project.address_full || undefined,
           notes: project.notes || undefined,
