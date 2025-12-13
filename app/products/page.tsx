@@ -126,7 +126,7 @@ export default function ProductsPage() {
 
   const clearFilters = () => {
     setFilters({
-      priceRange,
+      priceRange: [priceRange[0], priceRange[1]] as [number, number],
       categories: [],
       roomTypes: [],
       colors: [],
@@ -272,7 +272,8 @@ export default function ProductsPage() {
                           price: typeof product.selling_price === 'number' ? product.selling_price : undefined,
                           category: product.category,
                           brand: product.brand,
-                          mrp: typeof product.mrp === 'number' ? product.mrp : undefined
+                          mrp: typeof product.mrp === 'number' ? product.mrp : undefined,
+                          description: product.description || ''
                         }} />
                       );
                     })}

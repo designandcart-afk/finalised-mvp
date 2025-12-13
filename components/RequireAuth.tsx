@@ -14,16 +14,18 @@ export default function RequireAuth({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return;
     
     setSubmitting(true);
+    setError('');
     try {
       await signIn(email, password);
     } catch (error) {
-      // Error already handled by toast in auth context
+      setError(error instanceof Error ? error.message : 'Failed to sign in');
     } finally {
       setSubmitting(false);
     }
@@ -89,6 +91,12 @@ export default function RequireAuth({
                       className="w-full"
                     />
                   </div>
+
+                  {error && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                      <p className="text-red-600 text-sm text-center">{error}</p>
+                    </div>
+                  )}
 
                   <Button
                     type="submit"

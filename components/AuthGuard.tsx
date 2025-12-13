@@ -10,16 +10,18 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return;
     
     setSubmitting(true);
+    setError('');
     try {
       await signIn(email, password);
     } catch (error) {
-      // Error already handled by toast in auth context
+      setError(error instanceof Error ? error.message : 'Failed to sign in');
     } finally {
       setSubmitting(false);
     }
@@ -28,8 +30,20 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   // Show loading state
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-zinc-500">Loading...</div>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-white">
+        {/* Design&Cart Logo */}
+        <div className="flex items-center gap-4 mb-8">
+          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#d96857] to-[#c45745] flex items-center justify-center">
+            <div className="w-6 h-6 bg-[#2e2e2e] rounded-sm"></div>
+          </div>
+          <h1 className="text-2xl font-bold text-[#d96857]">Design&Cart</h1>
+        </div>
+        
+        {/* Loading Animation */}
+        <div className="flex items-center gap-2 text-[#2e2e2e]/70">
+          <div className="w-5 h-5 border-2 border-[#d96857] border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-sm">Loading...</span>
+        </div>
       </div>
     );
   }
@@ -85,6 +99,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
                       className="w-full"
                     />
                   </div>
+
+                  {error && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                      <p className="text-red-600 text-sm">{error}</p>
+                    </div>
+                  )}
 
                   <Button
                     type="submit"

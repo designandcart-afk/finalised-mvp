@@ -174,12 +174,13 @@ export default function chatPage() {
       setIsLoading(true);
 
       const meetingInfo = {
+        id: `meeting_${Date.now()}`,
+        projectId: activeProjectId,
         date: meetingDate,
         time: meetingTime,
         duration: 30,
-        title: `Design Consultation - ${projects.find(p => p.id === activeProjectId)?.name}`,
         link: '#',
-        status: 'scheduled'
+        status: 'scheduled' as const
       };
 
       await sendMessage(
@@ -474,6 +475,7 @@ export default function chatPage() {
           setError(null);
         }}
         title="Schedule Meeting"
+        size="medium"
       >
         <div className="p-5">
           <div className="space-y-3.5">

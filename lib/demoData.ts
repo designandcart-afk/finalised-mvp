@@ -22,8 +22,10 @@ export type DemoUpload = {
 export type DemoProject = {
   id: string;
   name: string;
+  project_code?: string;
   scope: string;
   address?: string;
+  pincode?: string;
   notes?: string;
   area?: string;
   // Optional list of areas (newer format). Use either `area` (legacy single) or `areas`.
@@ -84,7 +86,7 @@ export const demoProjects: DemoProject[] = [
     address: "12, 5th Cross, Koramangala, Bengaluru",
     area: "Living Room",
     areas: ["Living Room", "Kitchen", "Bedroom"],
-    status: "wip",
+    status: "in_progress",
     uploads: [],
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 4, // 4 days ago
   },
@@ -95,7 +97,7 @@ export const demoProjects: DemoProject[] = [
     address: "Plot 27, Palm Meadows, Whitefield, Bengaluru",
     area: "Dining",
     areas: ["Dining", "Living Room"],
-    status: "renders_shared",
+    status: "designs_shared",
     uploads: [],
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2, // 2 days ago
   },
@@ -117,7 +119,7 @@ export const demoProjects: DemoProject[] = [
     address: "Tech Park, HSR Layout, Bengaluru",
     area: "Reception",
     areas: ["Reception"],
-    status: "delivering",
+    status: "ordered",
     uploads: [],
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 1, // 1 day ago
   },
@@ -128,7 +130,7 @@ export const demoProjects: DemoProject[] = [
     address: "33, 4th Phase, JP Nagar, Bengaluru",
     area: "Living Room",
     areas: ["Living Room"],
-    status: "screenshots_shared",
+    status: "on_hold",
     uploads: [],
     createdAt: Date.now() - 1000 * 60 * 60 * 24 * 3, // 3 days ago
   },

@@ -13,12 +13,19 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useProjects } from '@/lib/contexts/projectsContext';
 import { Button, Badge, Input } from "@/components/UI";
-import { MessageCircle, ClipboardList, FolderOpen, ChevronLeft, ChevronRight, X, Send, Paperclip, CalendarDays, Image as ImageIcon, PlusCircle, Trash2 } from "lucide-react";
-import AreaModal from "@/components/AreaModal";
+import { MessageCircle, ClipboardList, FolderOpen, ChevronLeft, ChevronRight, X, Send, Paperclip, CalendarDays, Image as ImageIcon, PlusCircle, Trash2, FileText } from "lucide-react";
+import ProductSlidePanel from "@/components/ProductSlidePanel";
 import CenterModal from "@/components/CenterModal";
 import ChatMessage from "@/components/chat/ChatMessage";
 import { storage, type ChatMessage as StorageChatMessage } from "@/lib/storage";
 import { uploadFiles, UploadError, type UploadedFile } from "@/lib/uploadAdapter";
+
+// Razorpay type declaration
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 import { meetingService } from "@/lib/meetingService";
 
 // Lazy load heavy components for better initial load performance
@@ -42,10 +49,16 @@ export default function ProjectDetailPage() {
 
   // All hooks must be called before any early returns
   const [openArea, setOpenArea] = useState<string | null>(null);
+  const [openAreaSide, setOpenAreaSide] = useState<'left' | 'right'>('right');
   const [chatOpen, setChatOpen] = useState(false);
   const [meetOpen, setMeetOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [finalFilesOpen, setFinalFilesOpen] = useState(false);
+  const [quotesOpen, setQuotesOpen] = useState(false);
+  const [quotes, setQuotes] = useState<any[]>([]);
+  const [bills, setBills] = useState<any[]>([]);
+  const [isLoadingQuotesBills, setIsLoadingQuotesBills] = useState(false);
+  const [quotesTab, setQuotesTab] = useState<'quotes' | 'bills'>('quotes');
   const [scheduleMeetingOpen, setScheduleMeetingOpen] = useState(false);
   const [meetingDate, setMeetingDate] = useState("");
   const [meetingTime, setMeetingTime] = useState("");
@@ -71,6 +84,115 @@ export default function ProjectDetailPage() {
   const [chatText, setChatText] = useState("");
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  // Payment functionality
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [currentEstimate, setCurrentEstimate] = useState<any>(null);
+  const [paymentType, setPaymentType] = useState<'advance' | 'balance'>('advance');
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<any>(null);
+  const [rendersUnlocked, setRendersUnlocked] = useState(false);
+  const [finalFilesUnlocked, setFinalFilesUnlocked] = useState(false);
+  const [generatingEstimate, setGeneratingEstimate] = useState(false);
+
+  // Projects context hook - must be called early
+  const { updateProject } = useProjects();
+
+  // Function to generate estimates - TEMPORARY SIMPLE VERSION
+  const handleGenerateEstimate = async () => {
+    if (!projectId || isDemoProject) return;
+    
+    setGeneratingEstimate(true);
+    try {
+      console.log('Calling simple estimates API for project:', projectId);
+      const response = await fetch(`/api/projects/${projectId}/generate-simple-estimates`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      const data = await response.json();
+      console.log('Simple estimates API response:', data);
+      
+      if (data.success && data.estimates) {
+        setQuotes(data.estimates);
+        console.log('✅ Generated estimates successfully:', data.estimates.length);
+      } else {
+        console.error('❌ Failed to generate estimates:', data.error, data.details);
+      }
+    } catch (error) {
+      console.error('❌ Error generating estimates:', error);
+    } finally {
+      setGeneratingEstimate(false);
+    }
+  };
+
+  // Load estimates when Quotes & Bills modal opens, auto-generate if none exist
+  useEffect(() => {
+    const loadEstimates = async () => {
+      if (!projectId || isDemoProject || !quotesOpen) return;
+      
+      setIsLoadingQuotesBills(true);
+      try {
+        // Load estimates from project_design_estimates table
+        const { data: estimates, error } = await supabase
+          .from('project_design_estimates')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('Error loading estimates:', error);
+          setQuotes([]);
+        } else {
+          setQuotes(estimates || []);
+          console.log('Loaded estimates:', estimates);
+          
+          // Auto-generate estimate if none exist
+          if (!estimates || estimates.length === 0) {
+            console.log('No estimates found, auto-generating...');
+            await handleGenerateEstimate();
+          }
+        }
+
+        // Load bills from both project_design_payments (3D work) and project_quotes_bills (product purchases)
+        const [paymentsData, billsData] = await Promise.all([
+          supabase
+            .from('project_design_payments')
+            .select('*')
+            .eq('project_id', projectId)
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('project_quotes_bills')
+            .select('*')
+            .eq('project_id', projectId)
+            .eq('document_type', 'bill')
+            .order('created_at', { ascending: false })
+        ]);
+        
+        // Combine both types of bills
+        const allBills = [
+          ...(paymentsData.data || []),
+          ...(billsData.data || [])
+        ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        
+        setBills(allBills);
+        console.log('Loaded bills:', { payments: paymentsData.data, productBills: billsData.data });
+      } catch (error) {
+        console.error('Error in loadEstimates:', error);
+        setQuotes([]);
+        setBills([]);
+      } finally {
+        setIsLoadingQuotesBills(false);
+      }
+    };
+
+    if (quotesOpen) {
+      loadEstimates();
+    }
+  }, [projectId, quotesOpen, isDemoProject]);
 
   // Load meeting summaries
   useEffect(() => {
@@ -229,6 +351,112 @@ export default function ProjectDetailPage() {
     loadMessages();
   }, [projectId]);
 
+  // Handle payment click
+  const handlePaymentClick = (type: 'advance' | 'balance') => {
+    setPaymentType(type);
+    setPaymentModalOpen(true);
+  };
+
+  // Handle payment success
+  const handlePaymentSuccess = async () => {
+    // Reload payment status
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    const response = await fetch(`/api/projects/${projectId}/payment-status`, {
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      setPaymentStatus(data.status);
+      setCurrentEstimate(data.estimate);
+      setRendersUnlocked(data.status.rendersUnlocked);
+      setFinalFilesUnlocked(data.status.finalFilesUnlocked);
+    }
+
+    setPaymentModalOpen(false);
+  };
+
+  // Load payment status
+  useEffect(() => {
+    const loadPaymentStatus = async () => {
+      if (!projectId || isDemoProject) return;
+      
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const response = await fetch(`/api/projects/${projectId}/payment-status`, {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          setPaymentStatus(data.status);
+          setCurrentEstimate(data.estimate);
+          setRendersUnlocked(data.status.rendersUnlocked);
+          setFinalFilesUnlocked(data.status.finalFilesUnlocked);
+          
+          // Auto-generate estimate in background if none exists (non-blocking)
+          if (!data.estimate) {
+            setTimeout(() => {
+              handleGenerateEstimate();
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading payment status:', error);
+      }
+    };
+
+    loadPaymentStatus();
+  }, [projectId, isDemoProject]);
+
+  // Load quotes/estimates when quotes modal opens
+  useEffect(() => {
+    const loadQuotes = async () => {
+      if (!quotesOpen || isDemoProject) return;
+      
+      setIsLoadingQuotesBills(true);
+      try {
+        const { data: estimates, error } = await supabase
+          .from('project_design_estimates')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+
+        if (!error && estimates) {
+          setQuotes(estimates);
+          
+          // Auto-generate if no estimates exist
+          if (estimates.length === 0) {
+            await handleGenerateEstimate();
+            // Reload after generation
+            const { data: newEstimates } = await supabase
+              .from('project_design_estimates')
+              .select('*')
+              .eq('project_id', projectId)
+              .order('created_at', { ascending: false });
+            if (newEstimates) setQuotes(newEstimates);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading quotes:', error);
+      } finally {
+        setIsLoadingQuotesBills(false);
+      }
+    };
+
+    loadQuotes();
+  }, [quotesOpen, projectId, isDemoProject]);
+
   // Area management
   const [addingArea, setAddingArea] = useState(false);
   const [newAreaName, setNewAreaName] = useState("");
@@ -240,6 +468,8 @@ export default function ProjectDetailPage() {
   // File upload state
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [driveLink, setDriveLink] = useState('');
+  const [savingDriveLink, setSavingDriveLink] = useState(false);
 
   // Request change modal state
   const [requestChangeModal, setRequestChangeModal] = useState<{
@@ -701,59 +931,17 @@ export default function ProjectDetailPage() {
     }
   }, [lightboxOpen, lightboxImages.length]);
 
-  // Early return AFTER all hooks to comply with Rules of Hooks
-  // Don't show "not found" if we're in the process of deleting (causes hook count mismatch)
-  if (!project) {
-    if (isDeleting) {
-      return <div className="container py-8">Deleting project...</div>;
-    }
-    return <div className="container py-8">Project not found</div>;
-  }
-
-  const projectCode = (project as any).project_code || `#DAC-${project.id.slice(0, 6).toUpperCase()}`;
-
-  // Mock chat messages - only for demo projects
-  const mockMessages = isDemoProject ? [
-    {
-      id: '1',
-      projectId: project.id,
-      senderId: 'demo-user-1',
-      text: 'Hi, I have uploaded the latest renders.',
-      timestamp: Date.now() - 3600000
-    },
-    {
-      id: '2',
-      projectId: project.id,
-      senderId: 'designer',
-      text: 'Thank you, I will review them shortly.',
-      timestamp: Date.now() - 1800000
-    }
-  ] : [];
-
-  // Mock files - only for demo projects
-  const mockFiles = isDemoProject ? [
-    {
-      id: 'file1',
-      projectId: project.id,
-      type: 'pdf',
-      url: 'https://example.com/floor-plan.pdf'
-    },
-    {
-      id: 'file2',
-      projectId: project.id,
-      type: 'dwg',
-      url: 'https://example.com/technical-drawing.dwg'
-    }
-  ] : [];
-
+  // All useMemo and useCallback hooks must be defined BEFORE early return
   const allRendersForProject = useMemo(() => {
+    if (!project) return [];
     return isDemoProject 
       ? (demoRenders ?? []).filter((r) => r.projectId === project.id)
       : renders;
-  }, [isDemoProject, demoRenders, project.id, renders]);
+  }, [project, isDemoProject, demoRenders, renders]);
 
   // Derive areas: use project's areas (user-provided) or empty array for real users
   const areas = useMemo(() => {
+    if (!project) return [];
     const derivedFromLinks = Array.from(new Set(linked.map((l) => l.area))).filter(Boolean) as string[];
     const derivedFromRenders = Array.from(new Set(allRendersForProject.map((r) => r.area).filter(Boolean) as string[]));
     const derivedFromScreenshots = Array.from(new Set(screenshots.map((s) => s.area).filter(Boolean) as string[]));
@@ -763,7 +951,7 @@ export default function ProjectDetailPage() {
       : project.area
         ? [project.area]
         : (isDemoProject ? (derivedFromLinks.length ? derivedFromLinks : (derivedFromRenders.length ? derivedFromRenders : [])) : (derivedFromScreenshots.length ? derivedFromScreenshots : []));
-  }, [project.areas, project.area, isDemoProject, linked, allRendersForProject, screenshots]);
+  }, [project, isDemoProject, linked, allRendersForProject, screenshots]);
 
   // Screenshots from Supabase for real projects, mock for demo
   const screenshotsFor = useCallback((area: string) => {
@@ -841,6 +1029,51 @@ export default function ProjectDetailPage() {
     return Array.from(productMap.values());
   }, [productsFor]);
 
+  // Early return AFTER all hooks to comply with Rules of Hooks
+  // Don't show "not found" if we're in the process of deleting (causes hook count mismatch)
+  if (!project) {
+    if (isDeleting) {
+      return <div className="container py-8">Deleting project...</div>;
+    }
+    return <div className="container py-8">Project not found</div>;
+  }
+
+  const projectCode = (project as any).project_code || `#DAC-${project.id.slice(0, 6).toUpperCase()}`;
+
+  // Mock chat messages - only for demo projects
+  const mockMessages = isDemoProject ? [
+    {
+      id: '1',
+      projectId: project.id,
+      senderId: 'demo-user-1',
+      text: 'Hi, I have uploaded the latest renders.',
+      timestamp: Date.now() - 3600000
+    },
+    {
+      id: '2',
+      projectId: project.id,
+      senderId: 'designer',
+      text: 'Thank you, I will review them shortly.',
+      timestamp: Date.now() - 1800000
+    }
+  ] : [];
+
+  // Mock files - only for demo projects
+  const mockFiles = isDemoProject ? [
+    {
+      id: 'file1',
+      projectId: project.id,
+      type: 'pdf',
+      url: 'https://example.com/floor-plan.pdf'
+    },
+    {
+      id: 'file2',
+      projectId: project.id,
+      type: 'dwg',
+      url: 'https://example.com/technical-drawing.dwg'
+    }
+  ] : [];
+
   async function sendChat(text?: string, attachments?: UploadedFile[], meetingInfo?: StorageChatMessage['meetingInfo'], isSystemMessage?: boolean) {
     const messageText = text || chatText;
     if (!messageText.trim() && !attachments?.length && !meetingInfo) return;
@@ -904,6 +1137,7 @@ export default function ProjectDetailPage() {
 
       const meetingInfo = {
         id: `meet_${Date.now()}`,
+        projectId: project.id,
         date: meetingDate,
         time: meetingTime,
         duration: 30,
@@ -932,9 +1166,6 @@ export default function ProjectDetailPage() {
   }
 
   const files = projectFiles;
-
-  // Add new area to project
-  const { updateProject } = useProjects();
   
   const handleAddArea = async () => {
     if (!newAreaName.trim()) return;
@@ -1178,6 +1409,123 @@ export default function ProjectDetailPage() {
     setLightboxIndex((prev) => (prev - 1 + lightboxImages.length) % lightboxImages.length);
   };
 
+  // Payment processing functions
+  const processPayment = async () => {
+    if (!currentEstimate || !paymentType) return;
+
+    setIsProcessingPayment(true);
+    setPaymentError(null);
+
+    try {
+      const amount = paymentType === 'advance' 
+        ? Math.round(Number(currentEstimate.total_amount) * 0.3)
+        : Math.round(Number(currentEstimate.total_amount) * 0.7);
+
+      // Create payment order
+      const response = await fetch(`/api/projects/${projectId}/create-design-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+        },
+        body: JSON.stringify({
+          estimateId: currentEstimate.id,
+          paymentType: paymentType,
+          amount: amount,
+          currency: 'INR',
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to create payment order');
+      }
+
+      // Load Razorpay script if not already loaded
+      if (!window.Razorpay) {
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+        document.body.appendChild(script);
+        
+        await new Promise((resolve) => {
+          script.onload = resolve;
+        });
+      }
+
+      // Initialize Razorpay payment
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_key', // Use your test key
+        amount: data.amount,
+        currency: data.currency,
+        order_id: data.razorpayOrderId,
+        name: 'Design & Cart',
+        description: `${paymentType === 'advance' ? 'Advance' : 'Balance'} Payment`,
+        handler: async (response: any) => {
+          try {
+            // Verify payment
+            const verifyResponse = await fetch(`/api/projects/${projectId}/verify-design-payment`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+              },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+
+            const verifyData = await verifyResponse.json();
+
+            if (verifyData.success) {
+              setPaymentModalOpen(false);
+              setCurrentEstimate(null);
+              setPaymentType('advance');
+              
+              // Reload quotes to reflect payment status
+              // Trigger a re-fetch by toggling the modal state
+              if (quotesOpen) {
+                setQuotesOpen(false);
+                setTimeout(() => setQuotesOpen(true), 100);
+              }
+              
+              alert('Payment successful! Invoice will be generated shortly.');
+            } else {
+              throw new Error(verifyData.error || 'Payment verification failed');
+            }
+          } catch (error: any) {
+            console.error('Payment verification error:', error);
+            setPaymentError(error.message || 'Payment verification failed');
+          }
+        },
+        prefill: {
+          name: 'User Name',
+          email: 'user@example.com',
+        },
+        theme: {
+          color: '#d96857',
+        },
+        modal: {
+          ondismiss: () => {
+            setIsProcessingPayment(false);
+          },
+        },
+      };
+
+      const razorpay = new window.Razorpay(options);
+      razorpay.open();
+
+    } catch (error: any) {
+      console.error('Payment processing error:', error);
+      setPaymentError(error.message || 'Failed to process payment');
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
   return (
     <AuthGuard>
       <div className="py-4 bg-[#f4f3f0] -mx-4 px-4 rounded-2xl">
@@ -1220,10 +1568,26 @@ export default function ProjectDetailPage() {
 
               <div className="mt-3 flex items-center gap-2 flex-wrap">
                 {project.scope && (
-                  <Badge className="text-[13px] px-3 py-1">{project.scope}</Badge>
+                  <Badge className="text-[13px] px-3 py-1 bg-[#2e2e2e]/5 text-[#2e2e2e]/80 border border-[#2e2e2e]/10">{project.scope}</Badge>
                 )}
                 {project.status && (
-                  <Badge className="text-[13px] px-3 py-1">{project.status}</Badge>
+                  <span className={`text-xs rounded-full px-3 py-1.5 font-medium inline-block ${
+                    project.status === 'in_progress' ? 'bg-[#d96857]/5 text-[#d96857] border border-[#d96857]/15' :
+                    project.status === 'on_hold' ? 'bg-[#2e2e2e]/5 text-[#2e2e2e]/70 border border-[#2e2e2e]/10' :
+                    project.status === 'designs_shared' ? 'bg-[#d96857]/8 text-[#c85746] border border-[#d96857]/20' :
+                    project.status === 'approved' ? 'bg-[#d96857]/10 text-[#b84535] border border-[#d96857]/25' :
+                    project.status === 'ordered' ? 'bg-[#d96857]/12 text-[#a53d2e] border border-[#d96857]/30' :
+                    project.status === 'closed' ? 'bg-[#2e2e2e]/8 text-[#2e2e2e] border border-[#2e2e2e]/15' :
+                    'bg-[#d96857]/5 text-[#d96857] border border-[#d96857]/15'
+                  }`}>
+                    {project.status === 'in_progress' ? 'In Progress' :
+                     project.status === 'on_hold' ? 'On Hold' :
+                     project.status === 'designs_shared' ? 'Designs Shared' :
+                     project.status === 'approved' ? 'Approved' :
+                     project.status === 'ordered' ? 'Ordered' :
+                     project.status === 'closed' ? 'Closed' :
+                     project.status}
+                  </span>
                 )}
               </div>
             </div>
@@ -1258,125 +1622,11 @@ export default function ProjectDetailPage() {
           </div>
         </div>
 
-        {/* Combined Documents Section - Demo Only */}
-        {isDemoProject && (
-        <div className="relative bg-white border rounded-2xl p-5 shadow-lg shadow-black/5 mt-6">
-          <div className="flex flex-col sm:flex-row gap-3">
-            {/* View Quote Button */}
-            <button
-              onClick={() => {
-                const quoteSection = document.getElementById('quote-files');
-                if (quoteSection) {
-                  quoteSection.classList.toggle('hidden');
-                }
-              }}
-              className="flex-1 flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl border border-black/10 hover:border-[#d96857]/30 hover:bg-[#faf8f6] transition-all group"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-[#d96857]/10 flex items-center justify-center group-hover:bg-[#d96857]/20 transition-colors">
-                  <span className="text-[#d96857] font-bold text-sm">₹</span>
-                </div>
-                <div className="text-left">
-                  <div className="font-semibold text-[#2e2e2e] text-sm">View Quote</div>
-                  <div className="text-xs text-black/50">3 files</div>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-black/30 group-hover:text-[#d96857] transition-colors" />
-            </button>
-
-            {/* View Files Button */}
-            <button
-              onClick={() => {
-                const filesSection = document.getElementById('designer-files');
-                if (filesSection) {
-                  filesSection.classList.toggle('hidden');
-                }
-              }}
-              className="flex-1 flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl border border-black/10 hover:border-[#d96857]/30 hover:bg-[#faf8f6] transition-all group"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-[#d96857]/10 flex items-center justify-center group-hover:bg-[#d96857]/20 transition-colors">
-                  <FolderOpen className="w-5 h-5 text-[#d96857]" />
-                </div>
-                <div className="text-left">
-                  <div className="font-semibold text-[#2e2e2e] text-sm">View Files</div>
-                  <div className="text-xs text-black/50">6 files</div>
-                </div>
-              </div>
-              <ChevronRight className="w-5 h-5 text-black/30 group-hover:text-[#d96857] transition-colors" />
-            </button>
-          </div>
-
-          {/* Quote Files - Expandable */}
-          <div id="quote-files" className="hidden mt-4 pt-4 border-t border-black/5">
-            <div className="mb-2">
-              <h4 className="text-sm font-semibold text-[#2e2e2e]">Shared Quote</h4>
-              <p className="text-xs text-black/50">Bill and quotation documents</p>
-            </div>
-            <div className="space-y-1 mt-3">
-              {[
-                { id: 'q1', name: 'Project Quotation - Final.pdf', type: 'PDF', url: 'https://example.com/quotation.pdf' },
-                { id: 'q2', name: 'Cost Breakdown.xlsx', type: 'XLSX', url: 'https://example.com/cost-breakdown.xlsx' },
-                { id: 'q3', name: 'Payment Schedule.pdf', type: 'PDF', url: 'https://example.com/payment-schedule.pdf' }
-              ].map((file) => (
-                <a
-                  key={file.id}
-                  href={file.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-[#faf8f6] transition-all group"
-                >
-                  <span className="text-xs font-semibold text-[#d96857] bg-[#d96857]/10 px-2 py-0.5 rounded min-w-[45px] text-center">
-                    {file.type}
-                  </span>
-                  <span className="text-sm text-[#2e2e2e]/80 group-hover:text-[#d96857] group-hover:underline transition-colors">
-                    {file.name}
-                  </span>
-                </a>
-              ))}
-            </div>
-          </div>
-
-          {/* Designer Files - Expandable */}
-          <div id="designer-files" className="hidden mt-4 pt-4 border-t border-black/5">
-            <div className="mb-2">
-              <h4 className="text-sm font-semibold text-[#2e2e2e]">Designer Files</h4>
-              <p className="text-xs text-black/50">Technical drawings and specifications</p>
-            </div>
-            <div className="space-y-1 mt-3">
-              {[
-                { id: 'df1', name: 'Floor Plan - Final.pdf', type: 'PDF', url: 'https://example.com/floor-plan.pdf' },
-                { id: 'df2', name: 'Material Specifications.xlsx', type: 'XLSX', url: 'https://example.com/materials.xlsx' },
-                { id: 'df3', name: 'Lighting Layout.dwg', type: 'DWG', url: 'https://example.com/lighting.dwg' },
-                { id: 'df4', name: 'Color Palette Guide.pdf', type: 'PDF', url: 'https://example.com/colors.pdf' },
-                { id: 'df5', name: 'Product List with Links.xlsx', type: 'XLSX', url: 'https://example.com/products.xlsx' },
-                { id: 'df6', name: 'Electrical Points Layout.pdf', type: 'PDF', url: 'https://example.com/electrical.pdf' }
-              ].map((file) => (
-                <a
-                  key={file.id}
-                  href={file.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-[#faf8f6] transition-all group"
-                >
-                  <span className="text-xs font-semibold text-[#d96857] bg-[#d96857]/10 px-2 py-0.5 rounded min-w-[45px] text-center">
-                    {file.type}
-                  </span>
-                  <span className="text-sm text-[#2e2e2e]/80 group-hover:text-[#d96857] group-hover:underline transition-colors">
-                    {file.name}
-                  </span>
-                </a>
-              ))}
-            </div>
-          </div>
-        </div>
-        )}
-
         {/* Quote by Team Section */}
         <div className="grid sm:grid-cols-2 gap-4 mt-6">
           {/* Quotes and Bills Box */}
           <button
-            onClick={() => router.push(`/projects/${project.id}/quotes`)}
+            onClick={() => setQuotesOpen(true)}
             className="relative bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 border-2 border-[#d96857]/20 rounded-2xl p-6 shadow-lg shadow-black/5 hover:shadow-xl transition-all cursor-pointer text-left w-full"
           >
             <div className="flex items-center gap-4">
@@ -1407,8 +1657,12 @@ export default function ProjectDetailPage() {
                 </svg>
               </div>
               <div className="flex-1">
-                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">Final Files</h3>
-                <p className="text-sm text-[#2e2e2e]/70">Access all final drawings and specifications</p>
+                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-1">
+                  Final Files
+                </h3>
+                <p className="text-sm text-[#2e2e2e]/70">
+                  Access all final drawings and specifications
+                </p>
               </div>
               <svg className="w-6 h-6 text-[#d96857] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1497,7 +1751,18 @@ export default function ProjectDetailPage() {
                   
                   <div className="relative rounded-2xl overflow-hidden bg-[#f7f4f2] border">
                     {(activeTab[area] || 'renders') === 'renders' ? (
-                      areaRenders.length > 0 ? (
+                      // Only show lock if renders exist but are locked
+                      (!isDemoProject && !rendersUnlocked && areaRenders.length > 0) ? (
+                        <div className="h-[400px] flex flex-col items-center justify-center bg-gray-50 p-8">
+                          <svg className="w-16 h-16 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                          </svg>
+                          <h3 className="text-lg font-semibold text-gray-700 mb-2">🔒 Renders Locked</h3>
+                          <p className="text-sm text-gray-600 text-center max-w-xs">
+                            Renders will be available after final payment
+                          </p>
+                        </div>
+                      ) : areaRenders.length > 0 ? (
                         <div className="relative">
                           <img
                             src={areaRenders[activeSlides[area]?.renders || 0]?.imageUrl}
@@ -1634,48 +1899,40 @@ export default function ProjectDetailPage() {
                   </div>
                 </div>
 
-                <div className="mt-3 pl-2">
-                  <div className="flex items-center justify-between mb-2">
+                <div className="mt-4 pl-2">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <div className="text-xs font-medium text-black/70">Products</div>
-                      {areaProducts.length > 0 && (
-                        <div className="px-2 py-0.5 bg-[#d96857] text-white text-[10px] font-semibold rounded-full">
-                          {areaProducts.length}
+                      <div className="text-sm font-semibold text-[#2e2e2e]">Products</div>
+                      {uniqueProductsWithCount.length > 0 && (
+                        <div className="px-2.5 py-0.5 bg-[#d96857] text-white text-[11px] font-bold rounded-full">
+                          {uniqueProductsWithCount.length}
                         </div>
                       )}
                     </div>
                     <button
                       className="text-xs font-medium text-[#d96857] hover:text-[#c85745] transition-colors flex items-center gap-1"
-                      onClick={() => setOpenArea(area)}
+                      onClick={() => router.push(`/projects/${projectId}/area/${encodeURIComponent(area)}`)}
                     >
                       Product details →
                     </button>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {uniqueProductsWithCount.map(({ product: p, count }) => (
+                  <div className="flex gap-2.5 overflow-x-auto pb-1.5">{uniqueProductsWithCount.map(({ product: p, count }) => (
                       <div
                         key={p.id}
                         className="flex-shrink-0 cursor-pointer group relative"
-                        onClick={() => setOpenArea(area)}
+                        onClick={() => router.push(`/projects/${projectId}/area/${encodeURIComponent(area)}`)}
                       >
-                        <div className="relative w-[80px] h-[80px] rounded-lg overflow-visible">
+                        <div className="relative w-[80px] h-[80px] rounded-lg">
                           <img
                              src={p.imageUrl}
                              className="w-full h-full object-cover rounded-lg border border-black/5 group-hover:border-[#d96857]/30 transition-all group-hover:shadow-md"
                              alt={p.title}
                           />
-                          {/* Product count badge */}
-                          {
-                            count > 1 && (
-                            <div className="absolute -top-2 -right-2 w-6 h-6 bg-[#d96857] text-white text-[11px] font-bold rounded-full flex items-center justify-center shadow-lg border-2 border-white z-20">
-                              {count}
-                            </div>
-                          )}
                         </div>
                       </div>
                     ))}
                     {/* Add more products button when products exist */}
-                    {areaProducts.length > 0 && (
+                    {uniqueProductsWithCount.length > 0 && (
                       <button
                         onClick={() => router.push('/products')}
                         className="flex-shrink-0 w-[80px] h-[80px] rounded-lg border-2 border-dashed border-[#d96857]/30 hover:border-[#d96857]/60 bg-[#d96857]/5 hover:bg-[#d96857]/10 transition-all flex items-center justify-center group"
@@ -1685,7 +1942,7 @@ export default function ProjectDetailPage() {
                         </svg>
                       </button>
                     )}
-                    {areaProducts.length === 0 && (
+                    {uniqueProductsWithCount.length === 0 && (
                       <button
                         onClick={() => router.push('/products')}
                         className="text-xs text-[#2e2e2e]/60 py-3 px-4 bg-gradient-to-br from-[#d96857]/5 to-[#d96857]/10 rounded-xl border border-[#d96857]/20 hover:border-[#d96857]/40 hover:from-[#d96857]/10 hover:to-[#d96857]/15 transition-all flex items-center gap-2 group"
@@ -1718,37 +1975,28 @@ export default function ProjectDetailPage() {
         </Button>
       </div>
 
-      {openArea && (
-        <AreaModal
-          open={true}
-          onClose={() => setOpenArea(null)}
-          area={openArea}
-          products={productsFor(openArea)}
-          projectAddress={project.address || ""}
-        />
-      )}
-
       {/* Chat */}
       <CenterModal
         open={chatOpen}
         onClose={() => setChatOpen(false)}
         title={`Project Chat - ${project.name}`}
-        maxWidth="max-w-4xl"
+        size="large"
       >
-        {chatError && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 flex items-center justify-between">
-            <span>{chatError}</span>
-            <Button
-              className="p-1 hover:bg-red-100 rounded-full"
-              onClick={() => setChatError(null)}
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-        )}
-        
-        {/* Messages Area */}
-        <div className="h-[65vh] overflow-y-auto bg-gradient-to-b from-[#f9f9f8] to-white p-6 rounded-2xl mb-4 border border-zinc-100">
+        <div className="flex flex-col h-full">
+          {chatError && (
+            <div className="mx-6 mt-4 mb-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600 flex items-center justify-between flex-shrink-0">
+              <span>{chatError}</span>
+              <Button
+                className="p-1 hover:bg-red-100 rounded-full"
+                onClick={() => setChatError(null)}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+          
+          {/* Messages Area */}
+          <div className="flex-1 overflow-y-auto bg-gradient-to-b from-[#f9f9f8] to-white px-6 pt-6 pb-4">
           {messages.map((m) => {
             const hasAttachments = m.attachments && m.attachments.length > 0;
             const hasMeeting = m.meetingInfo;
@@ -1868,8 +2116,8 @@ export default function ProjectDetailPage() {
 
         {/* Input Area */}
         <div className="bg-white rounded-2xl border border-zinc-200 p-4">
-          {/* Quick Actions */}
-          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-zinc-100">
+            {/* Quick Actions */}
+            <div className="flex items-center gap-2 mb-3">
             <button
               className="flex items-center gap-1.5 text-xs bg-white hover:bg-[#d96857]/5 text-[#d96857] px-3 py-1.5 rounded-full font-medium transition-all border border-[#d96857] disabled:opacity-50"
               onClick={() => {
@@ -1924,35 +2172,36 @@ export default function ProjectDetailPage() {
 
           {/* Message Input */}
           <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <Input
-                placeholder="Type a message…"
-                value={chatText}
-                onChange={(e) => setChatText(e.target.value)}
-                className="w-full rounded-xl border-zinc-200 bg-[#f9f9f8] focus:bg-white px-4 py-3 text-[#2e2e2e] placeholder:text-[#2e2e2e]/40 resize-none"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (chatText.trim()) {
-                      sendChat();
+              <div className="flex-1">
+                <Input
+                  placeholder="Type a message…"
+                  value={chatText}
+                  onChange={(e) => setChatText(e.target.value)}
+                  className="w-full rounded-xl border-zinc-200 bg-[#f9f9f8] focus:bg-white px-4 py-3 text-[#2e2e2e] placeholder:text-[#2e2e2e]/40 resize-none"
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (chatText.trim()) {
+                        sendChat();
+                      }
                     }
-                  }
-                }}
-                disabled={isLoadingChat}
-              />
+                  }}
+                  disabled={isLoadingChat}
+                />
+              </div>
+              <Button
+                onClick={() => chatText.trim() && sendChat()}
+                disabled={isLoadingChat || !chatText.trim()}
+                className="rounded-xl bg-[#d96857] text-white px-6 py-3 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#c85746] transition-all shadow-sm hover:shadow-md flex-shrink-0"
+              >
+                {isLoadingChat ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                <span className="font-medium">Send</span>
+              </Button>
             </div>
-            <Button
-              onClick={() => chatText.trim() && sendChat()}
-              disabled={isLoadingChat || !chatText.trim()}
-              className="rounded-xl bg-[#d96857] text-white px-6 py-3 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#c85746] transition-all shadow-sm hover:shadow-md"
-            >
-              {isLoadingChat ? (
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-              <span className="font-medium">Send</span>
-            </Button>
           </div>
         </div>
       </CenterModal>
@@ -1967,11 +2216,12 @@ export default function ProjectDetailPage() {
           setChatError(null);
         }}
         title="Schedule Meeting"
+        size="medium"
       >
-        <div className="p-5">
-          <div className="space-y-3.5">
+        <div className="px-6 py-5 flex flex-col justify-center">
+          <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-1.5 text-[#2e2e2e]">
+              <label className="block text-sm font-medium mb-2 text-[#2e2e2e]">
                 Date
               </label>
               <input
@@ -1979,30 +2229,30 @@ export default function ProjectDetailPage() {
                 value={meetingDate}
                 onChange={(e) => setMeetingDate(e.target.value)}
                 min={new Date().toISOString().split('T')[0]}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
+                className="w-full px-4 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1.5 text-[#2e2e2e]">
+              <label className="block text-sm font-medium mb-2 text-[#2e2e2e]">
                 Time
               </label>
               <input
                 type="time"
                 value={meetingTime}
                 onChange={(e) => setMeetingTime(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
+                className="w-full px-4 py-2.5 rounded-lg border border-zinc-200 bg-[#f9f9f8] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 focus:border-[#d96857]/30 text-[#2e2e2e] text-sm transition-all"
               />
             </div>
           </div>
 
           {chatError && (
-            <div className="mt-3.5 p-2.5 rounded-lg bg-red-50 border border-red-200">
+            <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200">
               <p className="text-xs text-red-600">{chatError}</p>
             </div>
           )}
 
-          <div className="flex gap-2.5 mt-5">
+          <div className="flex gap-3 mt-6">
             <Button
               onClick={() => {
                 setScheduleMeetingOpen(false);
@@ -2039,9 +2289,9 @@ export default function ProjectDetailPage() {
         open={meetOpen}
         onClose={() => setMeetOpen(false)}
         title="Meeting Summary"
-        maxWidth="max-w-4xl"
+        size="large"
       >
-        <div className="max-h-[70vh] overflow-y-auto p-6">
+        <div className="p-6">
           {isLoadingMeetings ? (
             <div className="text-center py-12">
               <div className="w-8 h-8 border-4 border-[#d96857] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
@@ -2205,7 +2455,7 @@ export default function ProjectDetailPage() {
                   )}
 
                   {/* Action Buttons */}
-                  {meeting.status !== 'approved' && (
+                  {meeting.status === 'pending' && (
                     <div className="flex gap-2 pt-3 border-t border-zinc-100">
                       <button
                         onClick={() => handleMeetingApproval(meeting.id, 'approved')}
@@ -2245,7 +2495,7 @@ export default function ProjectDetailPage() {
           setFeedbackText("");
         }}
         title="Request Changes"
-        maxWidth="max-w-lg"
+        size="medium"
       >
         <div className="p-5">
           <p className="text-sm text-zinc-600 mb-4">
@@ -2291,9 +2541,9 @@ export default function ProjectDetailPage() {
           setNewAreaName("");
         }}
         title="Add New Area"
-        maxWidth="max-w-md"
+        size="medium"
       >
-        <div className="space-y-4">
+        <div className="p-6 space-y-4">
           <div>
             <label className="block text-sm font-medium text-[#2e2e2e] mb-2">
               Area Name
@@ -2360,15 +2610,15 @@ export default function ProjectDetailPage() {
           setUploadError(null);
         }}
         title="Project Folder"
-        maxWidth="max-w-4xl"
+        size="large"
       >
         <div className="px-6 pb-6">
         {/* Upload Section */}
-        <div className="mb-6 p-4 border-2 border-dashed border-[#d96857]/30 rounded-2xl bg-[#d96857]/5">
-          <div className="flex items-center justify-between">
+        <div className="mb-6 p-4 border-2 border-dashed border-[#d96857]/30 rounded-2xl bg-[#d96857]/5 mt-6">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-semibold text-[#2e2e2e] mb-1">Upload Files</h3>
-              <p className="text-xs text-[#2e2e2e]/60">Add your documents, images, or any project-related files</p>
+              <p className="text-xs text-[#2e2e2e]/60">Add your documents, images, or Google Drive links</p>
             </div>
             <div className="flex gap-2">
               <input
@@ -2405,6 +2655,66 @@ export default function ProjectDetailPage() {
               </Button>
             </div>
           </div>
+          
+          {/* Google Drive Link Input */}
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={driveLink}
+              onChange={(e) => setDriveLink(e.target.value)}
+              placeholder="Or paste Google Drive link here..."
+              className="flex-1 px-3 py-2 text-sm border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d96857] focus:border-transparent"
+              disabled={savingDriveLink}
+            />
+            <Button
+              onClick={async () => {
+                if (!driveLink.trim()) return;
+                setSavingDriveLink(true);
+                try {
+                  const { data: userData } = await supabase.auth.getUser();
+                  if (userData.user) {
+                    const { error } = await supabase
+                      .from('project_user_files')
+                      .insert({
+                        project_id: projectId,
+                        user_id: userData.user.id,
+                        file_url: driveLink.trim(),
+                        file_name: 'Google Drive Link',
+                        file_type: 'link',
+                        file_size: 0
+                      });
+                    
+                    if (error) throw error;
+                    
+                    // Reload files
+                    const { data } = await supabase
+                      .from('project_user_files')
+                      .select('*')
+                      .eq('project_id', projectId)
+                      .order('created_at', { ascending: false });
+                    
+                    if (data) setUserFiles(data);
+                    setDriveLink('');
+                  }
+                } catch (error) {
+                  console.error('Error saving Drive link:', error);
+                  setUploadError('Failed to save Drive link');
+                } finally {
+                  setSavingDriveLink(false);
+                }
+              }}
+              disabled={!driveLink.trim() || savingDriveLink}
+              className="bg-white text-[#d96857] border-2 border-[#d96857] hover:bg-[#d96857] hover:text-white px-4 py-2 disabled:opacity-50 transition-colors"
+            >
+              {savingDriveLink ? (
+                <div className="w-4 h-4 border-2 border-[#d96857] border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              )}
+            </Button>
+          </div>
           {uploadError && (
             <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
               {uploadError}
@@ -2419,6 +2729,7 @@ export default function ProjectDetailPage() {
             const fileName = f.file_name || f.name || fileUrl?.split('/').pop() || 'File';
             const fileType = f.file_type || f.type || fileName.split('.').pop()?.toLowerCase() || 'file';
             const isImage = fileType === 'png' || fileType === 'jpg' || fileType === 'jpeg' || fileType === 'gif' || fileType === 'webp';
+            const isDriveLink = fileType === 'link' || fileUrl?.includes('drive.google.com');
             
             return (
             <a
@@ -2430,7 +2741,19 @@ export default function ProjectDetailPage() {
             >
               {/* Thumbnail/Icon Area */}
               <div className="aspect-square bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center relative overflow-hidden">
-                {isImage ? (
+                {isDriveLink ? (
+                  <div className="flex flex-col items-center justify-center">
+                    <svg className="w-16 h-16 text-[#d96857]" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+                      <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                      <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/>
+                      <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+                      <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                      <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+                      <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+                    </svg>
+                    <span className="text-xs font-medium text-[#d96857] mt-2">Google Drive</span>
+                  </div>
+                ) : isImage ? (
                   <div className="absolute inset-0">
                     <img 
                       src={fileUrl} 
@@ -2452,7 +2775,7 @@ export default function ProjectDetailPage() {
                 {/* Type Badge */}
                 <div className="absolute top-2 right-2 px-2 py-1 rounded-md bg-white/95 backdrop-blur-sm shadow-lg">
                   <span className="text-[10px] font-bold text-[#d96857] uppercase tracking-wide">
-                    {fileType}
+                    {isDriveLink ? 'Drive' : fileType}
                   </span>
                 </div>
 
@@ -2473,7 +2796,8 @@ export default function ProjectDetailPage() {
                   {fileName}
                 </p>
                 <p className="text-[10px] text-zinc-500 mt-0.5">
-                  {isImage ? 'Image' : 
+                  {isDriveLink ? 'Google Drive Link' :
+                   isImage ? 'Image' : 
                    fileType === 'pdf' ? 'PDF' : 
                    fileType === 'doc' || fileType === 'docx' ? 'Word' :
                    fileType === 'xls' || fileType === 'xlsx' ? 'Excel' :
@@ -2505,24 +2829,34 @@ export default function ProjectDetailPage() {
         open={finalFilesOpen}
         onClose={() => setFinalFilesOpen(false)}
         title="Final Files"
-        maxWidth="max-w-4xl"
+        size="large"
       >
         <div className="px-6 pb-6">
           {/* Files Grid - View Only */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-6">
             {finalFiles.map((f) => {
               const fileUrl = f.file_url || f.url;
               const fileName = f.file_name || f.name || fileUrl?.split('/').pop() || 'File';
               const fileType = f.file_type || f.type || fileName.split('.').pop()?.toLowerCase() || 'file';
               const isImage = fileType === 'png' || fileType === 'jpg' || fileType === 'jpeg' || fileType === 'gif' || fileType === 'webp';
+              const isLocked = !isDemoProject && !finalFilesUnlocked;
               
               return (
               <a
                 key={f.id}
-                href={fileUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="group relative bg-white border-2 border-zinc-200 rounded-2xl hover:border-[#d96857] hover:shadow-xl hover:shadow-[#d96857]/10 transition-all duration-200 overflow-hidden cursor-pointer"
+                href={isLocked ? undefined : fileUrl}
+                target={isLocked ? undefined : "_blank"}
+                rel={isLocked ? undefined : "noreferrer"}
+                onClick={(e) => {
+                  if (isLocked) {
+                    e.preventDefault();
+                  }
+                }}
+                className={`group relative bg-white border-2 rounded-2xl transition-all duration-200 overflow-hidden ${
+                  isLocked 
+                    ? 'border-gray-300 cursor-not-allowed' 
+                    : 'border-zinc-200 hover:border-[#d96857] hover:shadow-xl hover:shadow-[#d96857]/10 cursor-pointer'
+                }`}
               >
                 {/* Thumbnail/Icon Area */}
                 <div className="aspect-square bg-gradient-to-br from-zinc-50 to-zinc-100 flex items-center justify-center relative overflow-hidden">
@@ -2531,9 +2865,13 @@ export default function ProjectDetailPage() {
                       <img 
                         src={fileUrl} 
                         alt={fileName}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        className={`w-full h-full object-cover transition-transform duration-300 ${
+                          isLocked ? 'blur-sm' : 'group-hover:scale-105'
+                        }`}
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                      {!isLocked && (
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                      )}
                     </div>
                   ) : fileType === 'pdf' ? (
                     <svg className="w-16 h-16 text-[#d96857]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2556,15 +2894,26 @@ export default function ProjectDetailPage() {
                     </span>
                   </div>
 
-                  {/* Hover Action */}
-                  <div className="absolute inset-0 bg-[#d96857]/90 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <div className="text-white text-center">
-                      <svg className="w-8 h-8 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                      <span className="text-xs font-medium">Download</span>
+                  {/* Lock Overlay or Hover Action */}
+                  {isLocked ? (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
+                      <div className="text-white text-center px-2">
+                        <svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        <span className="text-xs font-medium">Complete payment to unlock</span>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="absolute inset-0 bg-[#d96857]/90 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <div className="text-white text-center">
+                        <svg className="w-8 h-8 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span className="text-xs font-medium">Download</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 
                 {/* File Name & Description */}
@@ -2665,15 +3014,16 @@ export default function ProjectDetailPage() {
         </div>
       )}
 
-      {/* Area Products Modal */}
+      {/* Area Products Slide Panel */}
       {openArea && (
-        <AreaModal
+        <ProductSlidePanel
           open={!!openArea}
           onClose={() => setOpenArea(null)}
           area={openArea}
           products={productsFor(openArea)}
           projectAddress={project.address || ''}
           projectId={project.id}
+          side={openAreaSide}
         />
       )}
 
@@ -2682,9 +3032,9 @@ export default function ProjectDetailPage() {
         open={showDeleteConfirm}
         onClose={() => !isDeleting && setShowDeleteConfirm(false)}
         title="Delete Project?"
-        maxWidth="max-w-md"
+        size="medium"
       >
-        <div className="px-6 pb-6 space-y-6">
+        <div className="p-6 space-y-6">
           <div className="flex items-start gap-4 p-5 bg-red-50 border border-red-100 rounded-xl">
             <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
               <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2740,6 +3090,298 @@ export default function ProjectDetailPage() {
         </div>
       </CenterModal>
 
+      {/* Quotes & Bills Modal */}
+      <CenterModal
+        open={quotesOpen}
+        onClose={() => setQuotesOpen(false)}
+        title="Quotes & Bills"
+        size="large"
+      >
+        <div className="p-6">
+          {/* Tabs */}
+          <div className="flex gap-2 mb-6 border-b border-[#2e2e2e]/10">
+            <button
+              onClick={() => setQuotesTab('quotes')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                quotesTab === 'quotes'
+                  ? 'border-[#d96857] text-[#d96857]'
+                  : 'border-transparent text-[#2e2e2e]/60 hover:text-[#2e2e2e]'
+              }`}
+            >
+              Quotes
+            </button>
+            <button
+              onClick={() => setQuotesTab('bills')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                quotesTab === 'bills'
+                  ? 'border-[#d96857] text-[#d96857]'
+                  : 'border-transparent text-[#2e2e2e]/60 hover:text-[#2e2e2e]'
+              }`}
+            >
+              Bills
+            </button>
+          </div>
+
+          {/* Content */}
+          {quotesTab === 'quotes' ? (
+            isLoadingQuotesBills ? (
+              <div className="text-center py-12">
+                <div className="w-8 h-8 border-2 border-[#d96857] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm text-[#2e2e2e]/60">Loading quotes...</p>
+              </div>
+            ) : quotes.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 rounded-full bg-[#d96857]/10 flex items-center justify-center mx-auto mb-4">
+                  <FileText className="w-8 h-8 text-[#d96857]" />
+                </div>
+                <h3 className="text-lg font-semibold text-[#2e2e2e] mb-2">No Quotes Yet</h3>
+                <p className="text-sm text-[#2e2e2e]/60">Our team will prepare detailed quotations for your project</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {quotes.map((quote) => {
+                  // Calculate payment amounts
+                  const totalAmount = Number(quote.total_amount) || 0;
+                  const advanceAmount = Math.round(totalAmount * 0.3);
+                  const remainingAmount = totalAmount - advanceAmount;
+                  
+                  return (
+                    <div 
+                      key={quote.id} 
+                      className="bg-white border border-gray-200 rounded-2xl p-4 hover:border-[#d96857]/30 hover:shadow-md transition-all cursor-pointer group flex items-center justify-between"
+                      onClick={async (e) => {
+                        // Don't trigger if clicking on payment buttons
+                        if ((e.target as HTMLElement).closest('.payment-actions')) return;
+                        
+                        console.log('Generating quote for:', { quoteId: quote.id, projectId });
+                        try {
+                          // Generate detailed quote PDF
+                          const response = await fetch('/api/quote/generate', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                              quoteId: quote.id,
+                              projectId: projectId
+                            }),
+                          });
+
+                          const data = await response.json();
+
+                          if (data.success && data.html) {
+                            const printWindow = window.open('', '_blank');
+                            if (printWindow) {
+                              printWindow.document.write(data.html);
+                              printWindow.document.close();
+                              setTimeout(() => {
+                                printWindow.print();
+                              }, 500);
+                            }
+                          } else {
+                            console.error('Quote generation failed:', data);
+                            alert(`Failed to generate quote: ${data.error || 'Unknown error'}`);
+                          }
+                        } catch (error) {
+                          console.error('Quote generation error:', error);
+                          alert(`Failed to generate quote: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                        }
+                      }}
+                    >
+                      {/* Left side: Quote Icon and Quote Details */}
+                      <div className="flex items-center gap-4">
+                        {/* Quote Icon */}
+                        <div className="w-12 h-12 rounded-lg bg-[#d96857]/10 flex items-center justify-center group-hover:bg-[#d96857]/20 transition-colors">
+                          <FileText className="w-6 h-6 text-[#d96857]" />
+                        </div>
+                        
+                        {/* Quote Details */}
+                        <div>
+                          <h3 className="font-medium text-[#2e2e2e] group-hover:text-[#d96857] transition-colors">
+                            Design Quote
+                          </h3>
+                          <p className="text-sm text-[#2e2e2e]/60">
+                            {quote.estimate_number}
+                          </p>
+                          <p className="text-lg font-bold text-[#d96857] mt-1">
+                            ₹{totalAmount.toLocaleString('en-IN')}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {/* Right side: Payment Actions */}
+                      {quote.status === 'active' && (
+                        <div className="payment-actions flex items-center gap-3">
+                          {quote.estimate_type === 'initial' && (
+                            <div className="text-right">
+                              <button 
+                                className="bg-[#d96857] text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-[#c85745] transition-colors mb-1 block"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCurrentEstimate({
+                                    ...quote,
+                                    advance_amount: advanceAmount
+                                  });
+                                  setPaymentType('advance');
+                                  setPaymentModalOpen(true);
+                                }}
+                              >
+                                Pay Advance (30%)
+                              </button>
+                              <p className="text-xs text-[#2e2e2e]/60">
+                                ₹{advanceAmount.toLocaleString('en-IN')} to start project
+                              </p>
+                            </div>
+                          )}
+                          {quote.estimate_type === 'final' && (
+                            <div className="text-right">
+                              <button 
+                                className="bg-[#d96857] text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-[#c85745] transition-colors mb-1 block"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCurrentEstimate({
+                                    ...quote,
+                                    remaining_amount: remainingAmount
+                                  });
+                                  setPaymentType('balance');
+                                  setPaymentModalOpen(true);
+                                }}
+                              >
+                                Pay Balance (70%)
+                              </button>
+                              <p className="text-xs text-[#2e2e2e]/60">
+                                ₹{remainingAmount.toLocaleString('en-IN')} to complete project
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            // Bills Tab - Show both product bills and 3D work payment bills
+            isLoadingQuotesBills ? (
+              <div className="text-center py-12">
+                <div className="w-8 h-8 border-2 border-[#d96857] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm text-gray-600">Loading bills...</p>
+              </div>
+            ) : bills.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">No Bills Yet</h3>
+                <p className="text-sm text-gray-600">Bills will appear here after payments</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {bills.map((bill) => {
+                  // Generate bill name based on type
+                  const billName = bill.file_name 
+                    ? bill.file_name 
+                    : `BILL-${bill.id.substring(0, 8).toUpperCase()}.pdf`;
+                  
+                  return (
+                  <div
+                    key={bill.id}
+                    className="group flex flex-col items-center p-5 rounded-2xl border border-gray-200 hover:border-[#d96857] hover:shadow-lg transition-all cursor-pointer bg-white"
+                    onClick={async () => {
+                      try {
+                        const { data: { session } } = await supabase.auth.getSession();
+                        
+                        if (!session) {
+                          alert('Please log in to download bill');
+                          return;
+                        }
+
+                        // Check if this is a product bill or 3D work payment
+                        if (bill.order_id) {
+                          // Product bill - generate from order
+                          const response = await fetch('/api/bill/generate', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${session.access_token}`,
+                            },
+                            body: JSON.stringify({
+                              orderId: bill.order_id,
+                            }),
+                          });
+
+                          const data = await response.json();
+
+                          if (data.success && data.html) {
+                            const printWindow = window.open('', '_blank');
+                            if (printWindow) {
+                              printWindow.document.write(data.html);
+                              printWindow.document.close();
+                              setTimeout(() => {
+                                printWindow.print();
+                              }, 500);
+                            }
+                          } else {
+                            alert('Failed to generate bill');
+                          }
+                        } else if (bill.amount) {
+                          // 3D work payment - generate payment receipt PDF
+                          const response = await fetch('/api/payment/generate-bill', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${session.access_token}`,
+                            },
+                            body: JSON.stringify({
+                              paymentId: bill.id,
+                            }),
+                          });
+
+                          const data = await response.json();
+
+                          if (data.success && data.html) {
+                            const printWindow = window.open('', '_blank');
+                            if (printWindow) {
+                              printWindow.document.write(data.html);
+                              printWindow.document.close();
+                              setTimeout(() => {
+                                printWindow.print();
+                              }, 500);
+                            }
+                          } else {
+                            alert('Failed to generate payment receipt');
+                          }
+                        }
+                      } catch (error) {
+                        console.error('Bill generation error:', error);
+                        alert('Failed to generate bill');
+                      }
+                    }}
+                  >
+                    {/* PDF Icon */}
+                    <div className="w-14 h-14 rounded-xl bg-red-50 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <svg className="w-8 h-8 text-red-600" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/>
+                        <path d="M14 2v6h6M9.5 13.5c0-.28.22-.5.5-.5h1c.28 0 .5.22.5.5v3c0 .28-.22.5-.5.5h-1a.5.5 0 01-.5-.5v-3zM12 13h1.5c.28 0 .5.22.5.5v.5c0 .28-.22.5-.5.5H12v2h-.5v-3.5zM7 13h1c.28 0 .5.22.5.5v.5c0 .28-.22.5-.5.5H7v1h1.5v.5H6.5V13z" fill="white"/>
+                      </svg>
+                    </div>
+                    
+                    {/* Bill Name */}
+                    <p className="text-xs text-center text-gray-600 font-medium">
+                      {billName}
+                    </p>
+                  </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </div>
+      </CenterModal>
+
       {/* Request Change Modal */}
       {requestChangeModal?.open && (
         <CenterModal
@@ -2748,11 +3390,10 @@ export default function ProjectDetailPage() {
             setRequestChangeModal(null);
             setChangeNotes("");
           }}
+          title="Request Changes"
+          size="medium"
         >
           <div className="p-6">
-            <h3 className="text-xl font-semibold text-[#2e2e2e] mb-4">
-              Request Changes
-            </h3>
             <p className="text-sm text-gray-600 mb-4">
               Please describe what changes you'd like to see in this {requestChangeModal.type === 'renders' ? 'render' : 'screenshot'} for {requestChangeModal.area}:
             </p>
@@ -2784,6 +3425,78 @@ export default function ProjectDetailPage() {
           </div>
         </CenterModal>
       )}
+
+      {/* Payment Modal */}
+      <CenterModal
+        open={paymentModalOpen}
+        onClose={() => {
+          if (!isProcessingPayment) {
+            setPaymentModalOpen(false);
+            setPaymentError(null);
+          }
+        }}
+        title={`${paymentType === 'advance' ? 'Advance' : 'Balance'} Payment`}
+        size="medium"
+      >
+        {currentEstimate && (
+          <div className="p-6">
+            <div className="text-center mb-6">
+              <h3 className="text-xl font-semibold text-[#2e2e2e] mb-2">
+                {paymentType === 'advance' ? 'Advance Payment (30%)' : 'Balance Payment (70%)'}
+              </h3>
+              <p className="text-3xl font-bold text-[#d96857]">
+                ₹{(paymentType === 'advance' 
+                  ? Math.round(Number(currentEstimate.total_amount) * 0.3) 
+                  : Math.round(Number(currentEstimate.total_amount) * 0.7)
+                ).toLocaleString('en-IN')}
+              </p>
+              <p className="text-sm text-[#2e2e2e]/60 mt-2">
+                Quote: {currentEstimate.estimate_number}
+              </p>
+            </div>
+            
+            <div className="bg-[#d96857]/10 border border-[#d96857]/20 rounded-lg p-4 mb-6">
+              <p className="text-sm text-[#2e2e2e]">
+                {paymentType === 'advance' 
+                  ? 'This advance payment will unlock the initial design process and iterations.'
+                  : 'This final payment will complete your project and unlock all final deliverables.'
+                }
+              </p>
+            </div>
+
+            {paymentError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                <p className="text-sm text-red-600">{paymentError}</p>
+              </div>
+            )}
+            
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setPaymentModalOpen(false)}
+                disabled={isProcessingPayment}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 bg-[#d96857] hover:bg-[#c85745] disabled:opacity-50"
+                onClick={processPayment}
+                disabled={isProcessingPayment}
+              >
+                {isProcessingPayment ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                    Processing...
+                  </>
+                ) : (
+                  'Proceed to Payment'
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CenterModal>
     </AuthGuard>
   );
 }

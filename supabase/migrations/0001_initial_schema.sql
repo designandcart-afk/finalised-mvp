@@ -24,7 +24,7 @@ create table projects (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
   title text not null,
   scope text check (scope in ('1BHK', '2BHK', '3BHK', 'Commercial')) not null,
-  status text check (status in ('wip', 'screenshots_shared', 'approved', 'renders_shared', 'delivering', 'delivered')) default 'wip' not null,
+  status text check (status in ('in_progress', 'on_hold', 'designs_shared', 'approved', 'ordered', 'closed')) default 'in_progress' not null,
   address text not null,
   notes text,
   client_id uuid references profiles(id) on delete cascade not null,

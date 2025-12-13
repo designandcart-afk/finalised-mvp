@@ -41,6 +41,7 @@ const SCOPES = [
     name: string;
     scope: string;
     address: string;
+    pincode: string;
     notes: string;
     areaInput: string;
     areas: string[];
@@ -416,9 +417,12 @@ const SCOPES = [
                 className="appearance-none rounded-full border-0 pl-10 pr-10 py-2.5 bg-[#f2f0ed] text-[#2e2e2e]/60 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#d96857]/20 transition-all cursor-pointer hover:bg-[#d96857]/5"
               >
                 <option value="all">All Status</option>
-                <option value="wip">WIP</option>
-                <option value="completed">Completed</option>
-                <option value="on-hold">On Hold</option>
+                <option value="in_progress">In Progress</option>
+                <option value="on_hold">On Hold</option>
+                <option value="designs_shared">Designs Shared</option>
+                <option value="approved">Approved</option>
+                <option value="ordered">Ordered</option>
+                <option value="closed">Closed</option>
               </select>
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#2e2e2e]/50 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
@@ -472,8 +476,22 @@ const SCOPES = [
                     })}
                   </span>
                   {p.status && (
-                    <span className="text-sm rounded-full bg-[#d96857]/10 border border-[#d96857]/20 px-3 py-1 text-[#d96857] font-semibold">
-                      {p.status}
+                    <span className={`text-xs rounded-full px-3 py-1 font-medium transition-colors ${
+                      p.status === 'in_progress' ? 'bg-[#d96857]/5 text-[#d96857] border border-[#d96857]/15' :
+                      p.status === 'on_hold' ? 'bg-[#2e2e2e]/5 text-[#2e2e2e]/70 border border-[#2e2e2e]/10' :
+                      p.status === 'designs_shared' ? 'bg-[#d96857]/8 text-[#c85746] border border-[#d96857]/20' :
+                      p.status === 'approved' ? 'bg-[#d96857]/10 text-[#b84535] border border-[#d96857]/25' :
+                      p.status === 'ordered' ? 'bg-[#d96857]/12 text-[#a53d2e] border border-[#d96857]/30' :
+                      p.status === 'closed' ? 'bg-[#2e2e2e]/8 text-[#2e2e2e] border border-[#2e2e2e]/15' :
+                      'bg-[#d96857]/5 text-[#d96857] border border-[#d96857]/15'
+                    }`}>
+                      {p.status === 'in_progress' ? 'In Progress' :
+                       p.status === 'on_hold' ? 'On Hold' :
+                       p.status === 'designs_shared' ? 'Designs Shared' :
+                       p.status === 'approved' ? 'Approved' :
+                       p.status === 'ordered' ? 'Ordered' :
+                       p.status === 'closed' ? 'Closed' :
+                       p.status}
                     </span>
                   )}
                 </div>

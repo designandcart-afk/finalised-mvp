@@ -15,9 +15,11 @@ export type ChatMessage = {
   }[];
   meetingInfo?: {
     id: string;
+    projectId: string;
     date: string;
     time: string;
     duration: number;
+    title?: string;
     link: string;
     status: 'scheduled' | 'completed' | 'cancelled';
     participants?: string[];

@@ -32,7 +32,6 @@ const nextConfig = {
   // Enable edge runtime for better performance
   experimental: {
     serverActions: {},
-    optimizeCss: true,
   },
   // Optimize production build
   swcMinify: true,

@@ -1,5 +1,5 @@
 // Application Configuration
-// Set to false to enable real Supabase authentication for new users
+// Set to false to enable real Supabase authentication for production
 export const DEMO_MODE = false;
 
 // When DEMO_MODE is false:

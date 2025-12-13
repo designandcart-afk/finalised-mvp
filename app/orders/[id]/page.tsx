@@ -196,29 +196,47 @@ export default function OrderDetailPage() {
             {/* Order Items */}
             <div className="border-2 border-zinc-200 rounded-2xl overflow-hidden bg-white shadow-sm">
               <div className="bg-gradient-to-r from-[#f2f0ed] to-white p-4 border-b border-zinc-200">
-                <h2 className="font-semibold text-[#2e2e2e]">Items Ordered</h2>
-                <div className="text-xs text-zinc-500 mt-0.5">{order.items?.length || 0} items</div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-semibold text-[#2e2e2e]">Items Ordered</h2>
+                    <div className="text-xs text-zinc-500 mt-0.5">
+                      {order.items?.length || 0} item{(order.items?.length || 0) > 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-lg font-bold text-[#d96857]">
+                      ₹{order.amount.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                </div>
               </div>
               
               <div className="divide-y divide-zinc-100">
                 {order.items?.map((item, idx) => (
-                  <div key={idx} className="p-4 flex items-center gap-4">
+                  <div key={idx} className="p-4 flex items-center gap-4 hover:bg-zinc-50 transition">
                     {item.imageUrl && (
                       <img 
                         src={item.imageUrl} 
                         alt={item.title}
-                        className="w-16 h-16 object-cover rounded-lg border border-zinc-200"
+                        className="w-20 h-20 object-cover rounded-xl border border-zinc-200"
                       />
                     )}
                     <div className="flex-1">
-                      <div className="text-sm font-semibold text-[#2e2e2e]">{item.title || item.productId}</div>
-                      <div className="text-xs text-zinc-500 mt-1">Qty: {item.qty}</div>
-                      {item.area && (
-                        <div className="text-xs text-zinc-500">Area: {item.area}</div>
-                      )}
+                      <div className="font-semibold text-[#2e2e2e]">{item.title || item.productId}</div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-zinc-600">
+                        <span>Qty: {item.qty}</span>
+                        {item.area && (
+                          <><span>•</span><span>Area: {item.area}</span></>
+                        )}
+                      </div>
+                      <div className="text-xs text-zinc-500 mt-1">
+                        ₹{(item.price || 0).toLocaleString('en-IN')} per item
+                      </div>
                     </div>
-                    <div className="text-sm font-semibold text-[#2e2e2e]">
-                      ₹{((item.price || 0) * item.qty).toLocaleString('en-IN')}
+                    <div className="text-right">
+                      <div className="font-bold text-[#2e2e2e]">
+                        ₹{((item.price || 0) * item.qty).toLocaleString('en-IN')}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -229,13 +247,18 @@ export default function OrderDetailPage() {
           {/* Sidebar */}
           <div className="space-y-6">
             {/* Order Summary */}
-            <div className="border-2 border-zinc-200 rounded-2xl p-4 bg-white shadow-sm sticky top-6">
-              <h2 className="text-sm font-semibold text-[#2e2e2e] mb-4">Order Summary</h2>
+            <div className="border-2 border-zinc-200 rounded-2xl p-5 bg-white shadow-sm sticky top-6">
+              <h2 className="font-semibold text-[#2e2e2e] mb-4 pb-3 border-b border-zinc-200">Order Information</h2>
               
               <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-600">Order ID</span>
+                  <span className="font-mono text-xs text-[#2e2e2e]">#{order.id.slice(0, 8)}</span>
+                </div>
+
+                <div className="flex items-center justify-between">
                   <span className="text-zinc-600">Status</span>
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
                     order.status === 'paid'
                       ? 'bg-green-100 text-green-700'
                       : order.status === 'pending'
@@ -246,16 +269,9 @@ export default function OrderDetailPage() {
                   </span>
                 </div>
                 
-                <div className="flex justify-between">
-                  <span className="text-zinc-600">Amount</span>
-                  <span className="font-semibold text-[#2e2e2e]">
-                    {order.currency} {order.amount.toLocaleString('en-IN')}
-                  </span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="text-zinc-600">Order Date</span>
-                  <span className="text-zinc-600 text-xs">
+                <div className="flex items-center justify-between text-xs pt-2 border-t border-zinc-200">
+                  <span className="text-zinc-500">Order Date</span>
+                  <span className="text-zinc-600">
                     {new Date(order.created_at).toLocaleDateString('en-IN', {
                       day: 'numeric',
                       month: 'short',
@@ -265,9 +281,9 @@ export default function OrderDetailPage() {
                 </div>
 
                 {order.paid_at && (
-                  <div className="flex justify-between">
-                    <span className="text-zinc-600">Paid On</span>
-                    <span className="text-zinc-600 text-xs">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-zinc-500">Paid On</span>
+                    <span className="text-zinc-600">
                       {new Date(order.paid_at).toLocaleDateString('en-IN', {
                         day: 'numeric',
                         month: 'short',
@@ -277,18 +293,6 @@ export default function OrderDetailPage() {
                     </span>
                   </div>
                 )}
-
-                {order.razorpay_payment_id && (
-                  <>
-                    <div className="h-px bg-zinc-200 my-2" />
-                    <div>
-                      <div className="text-xs text-zinc-500 mb-1">Payment ID</div>
-                      <div className="text-xs font-mono text-zinc-600 break-all">
-                        {order.razorpay_payment_id}
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
 
               {/* Delivery Address */}
@@ -296,20 +300,32 @@ export default function OrderDetailPage() {
                 <>
                   <div className="h-px bg-zinc-200 my-4" />
                   <div>
-                    <div className="text-xs text-zinc-500 mb-2">Delivery Address</div>
+                    <div className="text-xs font-medium text-zinc-500 mb-2">DELIVERY TO</div>
                     {order.project_ids.map(projectId => {
                       const project = projects.find(p => p.id === projectId);
                       return project ? (
-                        <div key={projectId} className="text-sm">
-                          <div className="font-medium text-[#2e2e2e]">{project.name}</div>
+                        <div key={projectId} className="bg-zinc-50 rounded-lg p-3">
+                          <div className="font-semibold text-sm text-[#2e2e2e]">{project.name}</div>
                           {project.address && (
-                            <div className="text-xs text-zinc-600 mt-1 leading-relaxed">
+                            <div className="text-xs text-zinc-600 mt-1.5 leading-relaxed">
                               {project.address}
                             </div>
                           )}
                         </div>
                       ) : null;
                     })}
+                  </div>
+                </>
+              )}
+
+              {order.razorpay_payment_id && (
+                <>
+                  <div className="h-px bg-zinc-200 my-4" />
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500 mb-2">PAYMENT ID</div>
+                    <div className="text-xs font-mono text-zinc-600 break-all bg-zinc-50 p-2 rounded">
+                      {order.razorpay_payment_id}
+                    </div>
                   </div>
                 </>
               )}

@@ -4,279 +4,348 @@ export type Json =
   | boolean
   | null
   | { [key: string]: Json | undefined }
-  | Json[];
+  | Json[]
 
 export interface Database {
   public: {
     Tables: {
-      profiles: {
-        Row: {
-          id: string;
-          created_at: string;
-          updated_at: string;
-          email: string;
-          full_name: string | null;
-          role: 'designer' | 'client' | 'admin';
-        };
-        Insert: {
-          id: string;
-          created_at?: string;
-          updated_at?: string;
-          email: string;
-          full_name?: string | null;
-          role?: 'designer' | 'client' | 'admin';
-        };
-        Update: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          email?: string;
-          full_name?: string | null;
-          role?: 'designer' | 'client' | 'admin';
-        };
-      };
       projects: {
         Row: {
-          id: string;
-          created_at: string;
-          updated_at: string;
-          title: string;
-          scope: '1BHK' | '2BHK' | '3BHK' | 'Commercial';
-          status: 'wip' | 'screenshots_shared' | 'approved' | 'renders_shared' | 'delivering' | 'delivered';
-          address: string;
-          notes: string | null;
-          client_id: string;
-          designer_id: string | null;
-        };
+          id: string
+          user_id: string
+          project_name: string
+          location: string | null
+          area: string | null
+          bhk: string | null
+          project_folder_url: string | null
+          created_at: string
+          updated_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          title: string;
-          scope: '1BHK' | '2BHK' | '3BHK' | 'Commercial';
-          status?: 'wip' | 'screenshots_shared' | 'approved' | 'renders_shared' | 'delivering' | 'delivered';
-          address: string;
-          notes?: string | null;
-          client_id: string;
-          designer_id?: string | null;
-        };
+          id?: string
+          user_id: string
+          project_name: string
+          location?: string | null
+          area?: string | null
+          bhk?: string | null
+          project_folder_url?: string | null
+          created_at?: string
+          updated_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          title?: string;
-          scope?: '1BHK' | '2BHK' | '3BHK' | 'Commercial';
-          status?: 'wip' | 'screenshots_shared' | 'approved' | 'renders_shared' | 'delivering' | 'delivered';
-          address?: string;
-          notes?: string | null;
-          client_id?: string;
-          designer_id?: string | null;
-        };
-      };
-      products: {
+          id?: string
+          user_id?: string
+          project_name?: string
+          location?: string | null
+          area?: string | null
+          bhk?: string | null
+          project_folder_url?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      project_user_files: {
         Row: {
-          id: string;
-          created_at: string;
-          updated_at: string;
-          title: string;
-          description: string | null;
-          price: number;
-          category: string;
-          color: string | null;
-          image_url: string;
-          status: 'active' | 'inactive' | 'deleted';
-        };
+          id: string
+          project_id: string
+          user_id: string
+          file_name: string
+          file_url: string
+          file_type: string
+          file_size: number | null
+          created_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          title: string;
-          description?: string | null;
-          price: number;
-          category: string;
-          color?: string | null;
-          image_url: string;
-          status?: 'active' | 'inactive' | 'deleted';
-        };
+          id?: string
+          project_id: string
+          user_id: string
+          file_name: string
+          file_url: string
+          file_type: string
+          file_size?: number | null
+          created_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          title?: string;
-          description?: string | null;
-          price?: number;
-          category?: string;
-          color?: string | null;
-          image_url?: string;
-          status?: 'active' | 'inactive' | 'deleted';
-        };
-      };
-      project_products: {
+          id?: string
+          project_id?: string
+          user_id?: string
+          file_name?: string
+          file_url?: string
+          file_type?: string
+          file_size?: number | null
+          created_at?: string
+        }
+      }
+      project_final_files: {
         Row: {
-          id: string;
-          created_at: string;
-          project_id: string;
-          product_id: string;
-          area: string;
-          notes: string | null;
-        };
+          id: string
+          project_id: string
+          file_name: string
+          file_url: string
+          file_type: string
+          file_size: number | null
+          uploaded_by: string | null
+          created_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          project_id: string;
-          product_id: string;
-          area: string;
-          notes?: string | null;
-        };
+          id?: string
+          project_id: string
+          file_name: string
+          file_url: string
+          file_type: string
+          file_size?: number | null
+          uploaded_by?: string | null
+          created_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          project_id?: string;
-          product_id?: string;
-          area?: string;
-          notes?: string | null;
-        };
-      };
-      messages: {
+          id?: string
+          project_id?: string
+          file_name?: string
+          file_url?: string
+          file_type?: string
+          file_size?: number | null
+          uploaded_by?: string | null
+          created_at?: string
+        }
+      }
+      project_quotes_bills: {
         Row: {
-          id: string;
-          created_at: string;
-          project_id: string;
-          sender_id: string;
-          content: string;
-          attachments: Json[] | null;
-          meeting_info: Json | null;
-        };
+          id: string
+          project_id: string
+          file_name: string
+          file_url: string
+          file_size: number | null
+          document_type: 'quote' | 'bill'
+          created_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          project_id: string;
-          sender_id: string;
-          content: string;
-          attachments?: Json[] | null;
-          meeting_info?: Json | null;
-        };
+          id?: string
+          project_id: string
+          file_name: string
+          file_url: string
+          file_size?: number | null
+          document_type: 'quote' | 'bill'
+          created_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          project_id?: string;
-          sender_id?: string;
-          content?: string;
-          attachments?: Json[] | null;
-          meeting_info?: Json | null;
-        };
-      };
-      files: {
+          id?: string
+          project_id?: string
+          file_name?: string
+          file_url?: string
+          file_size?: number | null
+          document_type?: 'quote' | 'bill'
+          created_at?: string
+        }
+      }
+      chat_messages: {
         Row: {
-          id: string;
-          created_at: string;
-          name: string;
-          size: number;
-          mime_type: string;
-          url: string;
-          thumbnail_url: string | null;
-          project_id: string;
-          uploader_id: string;
-          type: 'image' | 'file';
-        };
+          id: string
+          project_id: string
+          user_id: string
+          message: string
+          created_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          name: string;
-          size: number;
-          mime_type: string;
-          url: string;
-          thumbnail_url?: string | null;
-          project_id: string;
-          uploader_id: string;
-          type: 'image' | 'file';
-        };
+          id?: string
+          project_id: string
+          user_id: string
+          message: string
+          created_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          name?: string;
-          size?: number;
-          mime_type?: string;
-          url?: string;
-          thumbnail_url?: string | null;
-          project_id?: string;
-          uploader_id?: string;
-          type?: 'image' | 'file';
-        };
-      };
-      orders: {
+          id?: string
+          project_id?: string
+          user_id?: string
+          message?: string
+          created_at?: string
+        }
+      }
+      meetings: {
         Row: {
-          id: string;
-          created_at: string;
-          updated_at: string;
-          client_id: string;
-          project_id: string | null;
-          status: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-          total_amount: number;
-          payment_status: 'pending' | 'paid' | 'failed';
-          shipping_address: Json;
-        };
+          id: string
+          project_id: string
+          meeting_date: string
+          meeting_time: string | null
+          location: string | null
+          notes: string | null
+          created_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          client_id: string;
-          project_id?: string | null;
-          status?: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-          total_amount: number;
-          payment_status?: 'pending' | 'paid' | 'failed';
-          shipping_address: Json;
-        };
+          id?: string
+          project_id: string
+          meeting_date: string
+          meeting_time?: string | null
+          location?: string | null
+          notes?: string | null
+          created_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          client_id?: string;
-          project_id?: string | null;
-          status?: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-          total_amount?: number;
-          payment_status?: 'pending' | 'paid' | 'failed';
-          shipping_address?: Json;
-        };
-      };
-      order_items: {
+          id?: string
+          project_id?: string
+          meeting_date?: string
+          meeting_time?: string | null
+          location?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+      }
+      project_design_estimates: {
         Row: {
-          id: string;
-          created_at: string;
-          order_id: string;
-          product_id: string;
-          quantity: number;
-          unit_price: number;
-          total_price: number;
-        };
+          id: string
+          project_id: string
+          estimate_type: 'rough' | 'initial' | 'final'
+          estimate_number: string
+          scope: string
+          areas_count: number
+          areas_list: string[] | null
+          iterations_count: number
+          options_count: number
+          base_amount: number
+          per_area_amount: number | null
+          per_iteration_amount: number | null
+          per_option_amount: number | null
+          extra_charges: number | null
+          extra_charges_description: string | null
+          subtotal: number
+          gst_percentage: number | null
+          gst_amount: number
+          total_amount: number
+          status: 'active' | 'superseded' | null
+          notes: string | null
+          line_items: any[] | null
+          discount_percentage: number | null
+          discount_amount: number | null
+          final_amount: number | null
+          created_at: string
+          updated_at: string
+        }
         Insert: {
-          id?: string;
-          created_at?: string;
-          order_id: string;
-          product_id: string;
-          quantity: number;
-          unit_price: number;
-          total_price: number;
-        };
+          id?: string
+          project_id: string
+          estimate_type: 'rough' | 'initial' | 'final'
+          estimate_number: string
+          scope: string
+          areas_count?: number
+          areas_list?: string[] | null
+          iterations_count?: number
+          options_count?: number
+          base_amount?: number
+          per_area_amount?: number | null
+          per_iteration_amount?: number | null
+          per_option_amount?: number | null
+          extra_charges?: number | null
+          extra_charges_description?: string | null
+          subtotal?: number
+          gst_percentage?: number | null
+          gst_amount?: number
+          total_amount?: number
+          status?: 'active' | 'superseded' | null
+          notes?: string | null
+          line_items?: any[] | null
+          discount_percentage?: number | null
+          discount_amount?: number | null
+          final_amount?: number | null
+          created_at?: string
+          updated_at?: string
+        }
         Update: {
-          id?: string;
-          created_at?: string;
-          order_id?: string;
-          product_id?: string;
-          quantity?: number;
-          unit_price?: number;
-          total_price?: number;
-        };
-      };
-    };
+          id?: string
+          project_id?: string
+          estimate_type?: 'rough' | 'initial' | 'final'
+          estimate_number?: string
+          scope?: string
+          areas_count?: number
+          areas_list?: string[] | null
+          iterations_count?: number
+          options_count?: number
+          base_amount?: number
+          per_area_amount?: number | null
+          per_iteration_amount?: number | null
+          per_option_amount?: number | null
+          extra_charges?: number | null
+          extra_charges_description?: string | null
+          subtotal?: number
+          gst_percentage?: number | null
+          gst_amount?: number
+          total_amount?: number
+          status?: 'active' | 'superseded' | null
+          notes?: string | null
+          line_items?: any[] | null
+          discount_percentage?: number | null
+          discount_amount?: number | null
+          final_amount?: number | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      project_design_payments: {
+        Row: {
+          id: string
+          project_id: string
+          estimate_id: string | null
+          user_id: string
+          payment_type: 'advance' | 'balance' | 'full'
+          amount: number
+          currency: string | null
+          razorpay_order_id: string | null
+          razorpay_payment_id: string | null
+          razorpay_signature: string | null
+          status: 'pending' | 'paid' | 'failed' | 'refunded' | null
+          invoice_number: string | null
+          invoice_date: string | null
+          invoice_pdf_url: string | null
+          created_at: string
+          paid_at: string | null
+          notes: string | null
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          estimate_id?: string | null
+          user_id: string
+          payment_type: 'advance' | 'balance' | 'full'
+          amount: number
+          currency?: string | null
+          razorpay_order_id?: string | null
+          razorpay_payment_id?: string | null
+          razorpay_signature?: string | null
+          status?: 'pending' | 'paid' | 'failed' | 'refunded' | null
+          invoice_number?: string | null
+          invoice_date?: string | null
+          invoice_pdf_url?: string | null
+          created_at?: string
+          paid_at?: string | null
+          notes?: string | null
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          estimate_id?: string | null
+          user_id?: string
+          payment_type?: 'advance' | 'balance' | 'full'
+          amount?: number
+          currency?: string | null
+          razorpay_order_id?: string | null
+          razorpay_payment_id?: string | null
+          razorpay_signature?: string | null
+          status?: 'pending' | 'paid' | 'failed' | 'refunded' | null
+          invoice_number?: string | null
+          invoice_date?: string | null
+          invoice_pdf_url?: string | null
+          created_at?: string
+          paid_at?: string | null
+          notes?: string | null
+        }
+      }
+    }
     Views: {
-      [_ in never]: never;
-    };
+      [_ in never]: never
+    }
     Functions: {
-      [_ in never]: never;
-    };
+      [_ in never]: never
+    }
     Enums: {
-      [_ in never]: never;
-    };
-  };
+      [_ in never]: never
+    }
+  }
 }

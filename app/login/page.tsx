@@ -177,47 +177,10 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* Demo Account Divider */}
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-zinc-200"></div>
-            </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="bg-white px-3 text-[#2e2e2e]/50">or try the demo</span>
-            </div>
-          </div>
-
-          {/* Demo Account Button */}
-          <Button
-            type="button"
-            onClick={handleDemoLogin}
-            disabled={isLoading}
-            className="w-full border border-[#d96857] text-[#d96857] rounded-xl py-3 font-medium hover:bg-[#d96857] hover:text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Loading demo...
-              </>
-            ) : (
-              'Explore Demo Account'
-            )}
-          </Button>
-          
-          {errors.demo && (
-            <p className="mt-2 text-xs text-center text-red-600 bg-red-50 py-2 px-3 rounded-lg">
-              {errors.demo}
-            </p>
-          )}
-          
-          <p className="mt-2 text-xs text-center text-[#2e2e2e]/50">
-            Demo credentials: demo@designandcart.in / demo123
-          </p>
-          
-          {/* New User Info */}
-          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-700 text-center">
-              <strong>New users:</strong> Create an account to get started with real authentication and data storage.
+          {/* Demo Account Info */}
+          <div className="mt-6 p-3 bg-[#f2f0ed] rounded-xl border border-zinc-200">
+            <p className="text-xs text-[#2e2e2e]/70 text-center">
+              Demo credentials: demo@designandcart.in / demo123
             </p>
           </div>
 

@@ -12,7 +12,9 @@ export interface Product {
   title: string
   imageUrl: string
   price: number
+  mrp?: number
   category: string
+  brand?: string
   roomType?: string
   description: string
   color?: string

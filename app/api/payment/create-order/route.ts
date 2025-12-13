@@ -4,7 +4,17 @@ import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
   try {
-    const { amount, currency = 'INR', items, projectIds } = await req.json();
+    const { 
+      amount, 
+      currency = 'INR', 
+      items, 
+      projectIds,
+      discount = 0,
+      discountType = 'none',
+      subtotal,
+      tax = 0,
+      taxRate = 0
+    } = await req.json();
 
     // Get authorization header
     const authHeader = req.headers.get('authorization');
@@ -63,34 +73,83 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Create order in database with 'pending' status
-    const { data: dbOrder, error: dbError } = await supabase
-      .from('orders')
-      .insert({
-        user_id: user?.id,
-        razorpay_order_id: order.id,
-        amount: amount,
-        currency: currency,
-        status: 'pending',
-        items: items,
-        project_ids: projectIds || [],
-      })
-      .select()
-      .single();
+    // Group items by project
+    console.log('📦 Received items:', JSON.stringify(items, null, 2));
+    
+    const itemsByProject: Record<string, any[]> = {};
+    items.forEach((item: any) => {
+      const projectId = item.projectId || 'general';
+      console.log(`Item ${item.productId} assigned to project: ${projectId}`);
+      if (!itemsByProject[projectId]) {
+        itemsByProject[projectId] = [];
+      }
+      itemsByProject[projectId].push(item);
+    });
 
-    if (dbError) {
-      console.error('Database error:', dbError);
-      return NextResponse.json(
-        { error: 'Failed to create order' },
-        { status: 500 }
-      );
+    console.log('📊 Items grouped by project:', Object.keys(itemsByProject));
+
+    // Calculate project-wise amounts
+    const projectOrders = Object.entries(itemsByProject).map(([projectId, projectItems]) => {
+      const projectSubtotal = projectItems.reduce((sum, item) => sum + (item.price * item.qty), 0);
+      const projectTax = (projectSubtotal * taxRate) / 100;
+      const projectTotal = projectSubtotal + projectTax;
+      
+      console.log(`💰 Project ${projectId}: ${projectItems.length} items, ₹${projectTotal}`);
+      
+      return {
+        projectId,
+        items: projectItems,
+        subtotal: projectSubtotal,
+        tax: projectTax,
+        amount: projectTotal,
+      };
+    });
+
+    // Create separate order for each project
+    const dbOrders = [];
+    console.log(`🔨 Creating ${projectOrders.length} separate orders...`);
+    
+    for (const projectOrder of projectOrders) {
+      console.log(`Creating order for project ${projectOrder.projectId}...`);
+      
+      const { data: dbOrder, error: dbError } = await supabase
+        .from('orders')
+        .insert({
+          user_id: user?.id,
+          razorpay_order_id: order.id, // Same Razorpay order ID for all
+          amount: projectOrder.amount,
+          subtotal: projectOrder.subtotal,
+          discount: 0, // Discount already applied in total calculation
+          discount_type: 'none',
+          tax: projectOrder.tax,
+          tax_rate: taxRate,
+          currency: currency,
+          status: 'pending',
+          items: projectOrder.items,
+          project_ids: [projectOrder.projectId], // Single project per order
+        })
+        .select()
+        .single();
+
+      if (dbError) {
+        console.error('Database error:', dbError);
+        return NextResponse.json(
+          { error: 'Failed to create order' },
+          { status: 500 }
+        );
+      }
+      
+      console.log(`✅ Created order ${dbOrder.id} for project ${projectOrder.projectId}`);
+      dbOrders.push(dbOrder);
     }
+
+    console.log(`✅ Successfully created ${dbOrders.length} orders:`, dbOrders.map(o => o.id));
 
     return NextResponse.json({
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      dbOrderId: dbOrder.id,
+      dbOrderIds: dbOrders.map(o => o.id), // Return all order IDs
     });
   } catch (error: any) {
     console.error('Create order error:', error);

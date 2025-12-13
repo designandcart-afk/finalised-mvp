@@ -101,7 +101,7 @@ export default function NewPasswordPage() {
             </p>
 
             <Button
-              onClick={() => router.push('/signin')}
+              onClick={() => router.push('/login')}
               className="w-full bg-[#d96857] text-white py-3 rounded-xl font-medium hover:bg-[#c85745] transition"
             >
               Sign In
@@ -148,7 +148,7 @@ export default function NewPasswordPage() {
       <div className="w-full max-w-md">
         {/* Back Button */}
         <Link 
-          href="/signin"
+          href="/login"
           className="inline-flex items-center gap-2 text-sm text-[#2e2e2e]/70 hover:text-[#d96857] mb-6 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />

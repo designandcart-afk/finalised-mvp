@@ -398,7 +398,7 @@ export default function ProductDetailPage() {
                         placeholder="Add a note (optional)"
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
-                        className="w-full min-h-[100px] resize-none border border-[#2e2e2e]/10 rounded-xl p-3 bg-[#f9f8f7] text-[#2e2e2e] placeholder:text-[#2e2e2e]/40 focus:outline-none focus:ring-2 focus:ring-[#d96857]/30"
+                        className="w-full min-h-[100px] resize-none border border-zinc-300 rounded-lg p-3 bg-transparent text-[#2e2e2e] placeholder:text-zinc-400 focus:outline-none focus:border-[#d96857] transition-colors"
                       />
 
                       <Button
@@ -410,13 +410,6 @@ export default function ProductDetailPage() {
                       </Button>
                     </>
                   )}
-
-                  <p className="text-sm text-[#2e2e2e]/60 text-center">
-                    Logged in as{" "}
-                    <span className="text-[#d96857] font-medium">
-                      {authEmail}
-                    </span>
-                  </p>
                 </div>
               ) : (
                 <div className="border-t border-[#2e2e2e]/10 pt-6 text-center space-y-4">
